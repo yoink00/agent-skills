@@ -67,6 +67,7 @@ import http.client
 import http.server
 import json
 import os
+import re
 import socket
 import socketserver
 import sys
@@ -1245,6 +1246,27 @@ def _ensure_daemon(path: Path, open_browser: bool) -> int:
 # CLI sub-commands
 # ---------------------------------------------------------------------------
 
+_BACKSLASH_ESCAPES = {
+    "n": "\n", "t": "\t", "r": "\r", "b": "\b",
+    "f": "\f", "v": "\v", "0": "\0",
+    "\\": "\\", '"': '"', "'": "'",
+}
+_ESCAPE_RE = re.compile(r"\\(.)", re.DOTALL)
+
+
+def _unescape_cli(s: str) -> str:
+    """Interpret backslash escapes in a single --old / --new CLI value.
+
+    Shells pass a backslash-n inside double quotes as two literal characters,
+    so a multi-line search value never matches the file's real newlines and the
+    edit fails with 'old text not found'. Decode the common escapes here;
+    unknown escapes are left untouched so genuine backslashes survive.
+    --edits-json is not processed (JSON already decodes its own escapes).
+    """
+    return _ESCAPE_RE.sub(
+        lambda m: _BACKSLASH_ESCAPES.get(m.group(1), m.group(0)), s)
+
+
 def cmd_open(args) -> int:
     path = Path(args.file).resolve()
     if not path.exists():
@@ -1276,7 +1298,9 @@ def cmd_edit(args) -> int:
             print(json.dumps({"ok": False,
                   "error": "provide --old and --new, or --edits-json"}), file=sys.stderr)
             return 1
-        edits = [{"old": args.old, "new": args.new, "replace_all": args.replace_all}]
+        edits = [{"old": _unescape_cli(args.old),
+                  "new": _unescape_cli(args.new),
+                  "replace_all": args.replace_all}]
 
     port = _ensure_daemon(path, open_browser=not args.no_browser)
     status, data = _request(port, "POST", "/api/edit", {"edits": edits})
@@ -1448,8 +1472,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("edit", help="Apply one or more search/replace edits.")
     sp.add_argument("file")
-    sp.add_argument("--old", help="Text to find (must occur once unless --replace-all).")
-    sp.add_argument("--new", help="Replacement text.")
+    sp.add_argument(
+        "--old",
+        help="Text to find (must occur once unless --replace-all). "
+             "Backslash escapes are interpreted (e.g. \\n -> newline).")
+    sp.add_argument(
+        "--new",
+        help="Replacement text. Backslash escapes are interpreted (e.g. \\n -> newline).")
     sp.add_argument("--replace-all", action="store_true",
                     help="Replace every occurrence of --old.")
     sp.add_argument("--edits-json", metavar="PATH",
