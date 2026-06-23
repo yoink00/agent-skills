@@ -83,7 +83,10 @@ use the normal edit tools for those.
      --old "Two weeks." --new "Three weeks, with a buffer for review."
    ```
 
-   For several edits in one go, pass a JSON array on stdin (lower latency, one
+   To match or insert a line break, write `\n` in `--old`/`--new` — backslash
+   escapes (`\n`, `\t`, `\r`, `\\`) are interpreted, so `--old "a\nb"` spans
+   two lines. (Use `\n` inside the JSON for `--edits-json`, where JSON decodes
+   its own escapes.) For several edits in one go, pass a JSON array on stdin (lower latency, one
    browser update):
 
    ```bash
