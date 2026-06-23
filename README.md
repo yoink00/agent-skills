@@ -1,6 +1,6 @@
 # Agent Skills
 
-[![skills.sh](https://skills.sh/b/OWNER/REPO)](https://skills.sh/OWNER/REPO)
+[![skills.sh](https://skills.sh/b/yoink00/agent-skills)](https://skills.sh/yoink00/agent-skills)
 
 A collection of [agent skills](https://skills.sh) by **Stuart Wallace**, each
 installable with the `skills` CLI.
@@ -10,16 +10,14 @@ installable with the `skills` CLI.
 Install every skill in this repo:
 
 ```bash
-npx skills add OWNER/REPO
+npx skills add yoink00/agent-skills
 ```
 
 Install a single skill:
 
 ```bash
-npx skills add OWNER/REPO --skill markdown-review
+npx skills add yoink00/agent-skills --skill markdown-review
 ```
-
-> Replace `OWNER/REPO` with this repository's GitHub path once it is published.
 
 ## Skills
 
