@@ -794,17 +794,22 @@ async function clearOldRounds(){{
 }}
 
 // ── Render document ──────────────────────────────────────────────────
-function renderDoc(isUpdate){{
+// Renders only the rendered-document body. The Changes view (renderDiff) and
+// the top-bar edit-count meta are driven separately from refresh() so that
+// events which bump the version but leave the document text untouched — adding
+// or deleting a comment, clearing old rounds, submitting — don't re-patch the
+// DOM. Re-patching would otherwise compare blocks still flagged `changed`/
+// `fading` against clean re-parsed HTML and re-flash them, making the "changed
+// block" highlight (and a spurious "document updated" toast) come back every
+// time you comment.
+function renderDoc(patch){{
   const html=marked.parse(state.current_text||'');
-  if(isUpdate && mdRender.childNodes.length){{
+  if(patch && mdRender.childNodes.length){{
     const n=diffAndPatch(mdRender, html);
     if(n>0) toast('↻ document updated ('+n+' block'+(n!==1?'s':'')+')');
   }} else {{
     mdRender.innerHTML=html;
   }}
-  renderDiff();
-  document.getElementById('doc-meta').textContent =
-    state.edits.length+' edit'+(state.edits.length!==1?'s':'');
 }}
 
 // ── Comments ─────────────────────────────────────────────────────────
@@ -917,12 +922,18 @@ document.getElementById('send-btn').addEventListener('click',async()=>{{
 // ── State sync ───────────────────────────────────────────────────────
 async function refresh(){{
   const r=await fetch('/api/state'); const s=await r.json();
-  const wasVersion=state.version;
-  const isUpdate=wasVersion>=0;
-  const verChanged=s.version!==state.version;
+  const firstLoad = state.version < 0;
+  // Only re-patch the rendered document when its text actually changed.
+  // Comments, submits and diff-clears bump the version too; patching on those
+  // would re-flash every block still carrying the transient `changed` class.
+  const docChanged = s.current_text !== state.current_text;
+  const verChanged = s.version !== state.version;
   state=s;
-  if(verChanged || wasVersion<0) renderDoc(isUpdate && verChanged);
+  if(firstLoad || docChanged) renderDoc(!firstLoad && docChanged);
+  if(firstLoad || verChanged) renderDiff();
   renderComments();
+  document.getElementById('doc-meta').textContent =
+    state.edits.length+' edit'+(state.edits.length!==1?'s':'');
 }}
 
 async function poll(){{
