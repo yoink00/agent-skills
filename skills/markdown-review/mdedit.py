@@ -64,10 +64,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# CLI sub-commands
+# ---------------------------------------------------------------------------
+from cliutil import unescape_cli as _unescape_cli
 
 # cmd_vendor_manifest reports the vendored-asset manifest (the single source
 # of truth lives in frontend.py and is also read by update-vendor.sh).
@@ -76,36 +80,6 @@ from frontend import VENDOR_ASSETS, VENDOR_DIR
 # The HTTP daemon and session registry live in server.py; the CLI commands
 # below are thin clients that talk to it over localhost.
 from server import _ensure_daemon, _find_running, _request
-
-# ---------------------------------------------------------------------------
-# CLI sub-commands
-# ---------------------------------------------------------------------------
-
-_BACKSLASH_ESCAPES = {
-    "n": "\n",
-    "t": "\t",
-    "r": "\r",
-    "b": "\b",
-    "f": "\f",
-    "v": "\v",
-    "0": "\0",
-    "\\": "\\",
-    '"': '"',
-    "'": "'",
-}
-_ESCAPE_RE = re.compile(r"\\(.)", re.DOTALL)
-
-
-def _unescape_cli(s: str) -> str:
-    """Interpret backslash escapes in a single --old / --new CLI value.
-
-    Shells pass a backslash-n inside double quotes as two literal characters,
-    so a multi-line search value never matches the file's real newlines and the
-    edit fails with 'old text not found'. Decode the common escapes here;
-    unknown escapes are left untouched so genuine backslashes survive.
-    --edits-json is not processed (JSON already decodes its own escapes).
-    """
-    return _ESCAPE_RE.sub(lambda m: _BACKSLASH_ESCAPES.get(m.group(1), m.group(0)), s)
 
 
 def cmd_open(args) -> int:
