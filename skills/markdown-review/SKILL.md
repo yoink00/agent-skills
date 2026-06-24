@@ -253,13 +253,31 @@ people in parallel.
      people is preserved.
    - **Stale** comments reference text that has since been edited. They appear
      with a warning in the viewer and a `"stale": true` flag in the review JSON.
-   - Imported comments appear immediately in the live viewer and flow through
-     the normal `review` → `resolve` cycle.
+   - Imported comments are added as **pending, unsubmitted** comments — they
+     appear immediately in the live viewer's sidebar and as highlights in the
+     document, but are **not** sent to you yet. They wait for the user to click
+     **Send to LLM**, exactly like comments the user typed directly.
 
-4. You can import from multiple colleagues — each import adds new comments
-   (deduplicated). Then run `review` as usual to collect all feedback at once.
+4. **Block on `review` before responding.** Imported comments are *not* acted
+   on automatically. After importing, run `review`:
 
-5. **Finish.** When the user is happy, shut the session down:
+   ```bash
+   python3 "$MDEDIT" review path/to/doc.md
+   ```
+
+   It blocks until the user reviews the comments in the browser and clicks
+   **Send to LLM**, then the comments come back to you as JSON. **Do not act on the
+   imported JSON directly** — the user must get the chance to review and gate
+   the feedback, just as in a normal round. (Skipping `review` also skips the
+   new-round arming that `reset_submitted` does, so response edits would land
+   in the wrong round in the Changes view.)
+
+5. Once `review` returns, address the comments with `edit` (which opens a fresh
+   round), `resolve` the ones you addressed, and loop as usual. You can import
+   from multiple colleagues before a single `review` — each import adds new
+   (deduplicated) pending comments.
+
+6. **Finish.** When the user is happy, shut the session down:
 
    ```bash
    python3 "$MDEDIT" stop path/to/doc.md
