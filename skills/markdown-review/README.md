@@ -20,6 +20,10 @@ split into focused modules alongside it: `model.py` (session state),
   back to the agent as structured JSON.
 - Re-blocks each review round so the agent waits for fresh feedback rather than
   re-reading stale comments.
+- **Share for offline review** — download a standalone HTML copy of the
+  document (with the full commenting UI) that a colleague can open in any
+  browser without a server. Their comments export as JSON and import back into
+  the live session.
 
 ## Requirements
 
@@ -40,6 +44,8 @@ python3 "$MDEDIT" open doc.md
 python3 "$MDEDIT" edit doc.md --old "old text" --new "new text"
 python3 "$MDEDIT" review doc.md      # blocks until you click "Send to LLM"
 python3 "$MDEDIT" resolve doc.md --all
+python3 "$MDEDIT" share doc.md > doc.share.html   # offline review copy
+python3 "$MDEDIT" import-comments doc.md --from colleague.comments.json
 python3 "$MDEDIT" stop doc.md
 ```
 

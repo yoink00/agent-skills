@@ -72,12 +72,16 @@ class TestComment:
         assert d["context_after"] == ""
         assert d["source"] == "diff"
         assert d["round"] == 2
+        assert d["author"] == "You"
+        assert d["stale"] is False
 
     def test_defaults(self):
         c = Comment(id=1, body="x")
         assert c.quote == ""
         assert c.source == "doc"
         assert c.round == 0
+        assert c.author == "You"
+        assert c.stale is False
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +279,40 @@ class TestComments:
         v = session.version
         session.delete_comment(999)
         assert session.version == v  # no change
+
+    def test_add_comment_with_author(self, session):
+        c = session.add_comment("note", author="Alice")
+        assert c.author == "Alice"
+        assert c.to_dict()["author"] == "Alice"
+
+    def test_add_comment_default_author(self, session):
+        c = session.add_comment("note")
+        assert c.author == "You"
+
+    def test_add_comment_with_stale(self, session):
+        c = session.add_comment("note", quote="old text", stale=True)
+        assert c.stale is True
+        assert c.to_dict()["stale"] is True
+
+    def test_add_comment_default_stale_false(self, session):
+        c = session.add_comment("note")
+        assert c.stale is False
+
+    def test_comment_exists_finds_match(self, session):
+        session.add_comment("hi", quote="q", source="doc", author="Alice")
+        assert session.comment_exists(
+            body="hi", quote="q", source="doc", author="Alice"
+        )
+
+    def test_comment_exists_returns_false_for_no_match(self, session):
+        session.add_comment("hi", quote="q", author="Alice")
+        assert not session.comment_exists(body="hi", quote="q", author="Bob")
+        assert not session.comment_exists(body="different")
+
+    def test_comment_exists_partial_fields(self, session):
+        session.add_comment("hi", author="Alice")
+        assert session.comment_exists(author="Alice")
+        assert not session.comment_exists(author="Bob")
 
 
 # ---------------------------------------------------------------------------

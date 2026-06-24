@@ -25,7 +25,13 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from frontend import _VENDOR_MIME, VENDOR_ASSETS, VENDOR_DIR, build_html
+from frontend import (
+    _VENDOR_MIME,
+    VENDOR_ASSETS,
+    VENDOR_DIR,
+    build_html,
+    build_share_html,
+)
 from model import Session
 
 DEFAULT_PORT = 7575
@@ -127,6 +133,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"version": ver, "submitted": self.session.submitted})
         elif path == "/api/ping":
             self._json({"ok": True, "path": str(self.session.path)})
+        elif path == "/api/share":
+            html = build_share_html(self.session.snapshot()).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(html)
         elif path.startswith("/vendor/"):
             self._serve_vendor(path[len("/vendor/") :])
         else:
@@ -175,6 +189,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data.get("context_after", ""),
                 data.get("source", "doc"),
                 int(data.get("round", 0) or 0),
+                data.get("author", "You"),
+                bool(data.get("stale", False)),
             )
             self._json(c.to_dict())
         elif path == "/api/comment/delete":

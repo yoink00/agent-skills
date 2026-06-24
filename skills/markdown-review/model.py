@@ -49,6 +49,8 @@ class Comment:
     context_after: str = ""
     source: str = "doc"  # "doc" (rendered view) or "diff" (Changes view)
     round: int = 0  # round the diff comment refers to (0 = n/a)
+    author: str = "You"  # who wrote the comment (for multi-reviewer support)
+    stale: bool = False  # true if the quote text no longer exists in the doc
     ts: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
@@ -60,6 +62,8 @@ class Comment:
             "context_after": self.context_after,
             "source": self.source,
             "round": self.round,
+            "author": self.author,
+            "stale": self.stale,
             "ts": self.ts,
         }
 
@@ -180,6 +184,8 @@ class Session:
         after: str = "",
         source: str = "doc",
         round: int = 0,
+        author: str = "You",
+        stale: bool = False,
     ) -> Comment:
         with self._cond:
             self._comment_seq += 1
@@ -191,6 +197,8 @@ class Session:
                 context_after=after,
                 source=source,
                 round=round,
+                author=author,
+                stale=stale,
             )
             self.comments.append(c)
             self.version += 1
@@ -208,6 +216,18 @@ class Session:
                 self.last_activity = time.time()
                 self._cond.notify_all()
             return changed
+
+    def comment_exists(self, **kwargs) -> bool:
+        """Check whether a comment with the given field values already exists.
+
+        Used by ``import-comments`` to skip exact duplicates. Only the fields
+        passed as keyword arguments are compared.
+        """
+        with self.lock:
+            for c in self.comments:
+                if all(getattr(c, k) == v for k, v in kwargs.items()):
+                    return True
+            return False
 
     def submit(self) -> None:
         with self._cond:

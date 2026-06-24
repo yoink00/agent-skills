@@ -7,8 +7,13 @@ a vendored file is absent the page falls back to its CDN URL. The manifest
 (``VENDOR_ASSETS``) is the single source of truth consumed by
 ``mdedit.py vendor-manifest`` and ``update-vendor.sh``.
 
-This module is pure (no I/O beyond stat-ing the vendor dir) so the asset
-fallback logic and HTML shape are unit-testable directly.
+:func:`build_share_html` produces a self-contained standalone HTML page for
+offline review — the document snapshot and JS libraries are inlined so the
+page works with no server. Comments are exported as a downloadable JSON file
+and re-imported via ``mdedit.py import-comments``.
+
+This module is pure (no I/O beyond stat-ing/reading the vendor dir) so the
+asset fallback logic and HTML shape are unit-testable directly.
 """
 
 from __future__ import annotations
@@ -43,6 +48,26 @@ def _asset_url(filename: str) -> str:
     if (VENDOR_DIR / filename).is_file():
         return f"/vendor/{filename}"
     return VENDOR_ASSETS[filename]
+
+
+def _inline_or_url(filename: str, tag: str) -> str:
+    """Return an HTML element that either inlines a vendored asset or links
+    to its CDN fallback URL.
+
+    Used by the standalone share page so it works offline: if the JS/CSS
+    library is vendored under ``vendor/`` its contents are inlined directly
+    into the HTML; otherwise the CDN ``<script src>`` / ``<link>`` is emitted.
+    """
+    path = VENDOR_DIR / filename
+    if path.is_file():
+        content = path.read_text(encoding="utf-8")
+        if tag == "script":
+            return f"<script>\n{content}\n</script>"
+        return f"<style>\n{content}\n</style>"
+    url = VENDOR_ASSETS[filename]
+    if tag == "script":
+        return f'<script src="{url}"></script>'
+    return f'<link rel="stylesheet" href="{url}">'
 
 
 # Characters that must be neutralised when a JSON value is interpolated into a
@@ -120,6 +145,13 @@ body{
 #send-btn:hover{background:var(--bb-400);}
 #send-btn:disabled{background:var(--bg-700);color:var(--bg-500);cursor:default;}
 
+#share-btn{
+  background:var(--bg-700);border:1px solid var(--bg-600);color:var(--bg-200);
+  padding:6px 14px;border-radius:6px;font-size:0.78rem;font-weight:500;
+  cursor:pointer;transition:background .12s,border-color .12s;
+}
+#share-btn:hover{background:var(--bg-600);color:var(--bg-100);border-color:var(--bb-500);}
+
 /* layout */
 #body{flex:1;display:flex;overflow:hidden;}
 #content-area{flex:1;overflow-y:auto;padding:34px 48px;position:relative;}
@@ -141,6 +173,8 @@ body{
 #comments-list::-webkit-scrollbar-thumb{background:var(--bg-700);border-radius:3px;}
 .comment-card{background:var(--bg-800);border:1px solid var(--bg-700);border-radius:7px;
   padding:10px 12px;margin-bottom:9px;}
+.comment-card .comment-meta{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:5px;}
+.comment-card .author{font-size:0.72rem;font-weight:600;color:var(--bb-300);}
 .comment-card .quote{font-size:0.76rem;color:var(--bg-400);border-left:2px solid var(--bb-500);
   padding-left:8px;margin-bottom:7px;font-style:italic;white-space:pre-wrap;
   max-height:5.2em;overflow:hidden;}
@@ -149,6 +183,9 @@ body{
 .comment-card .del{float:right;background:none;border:none;color:var(--bg-500);cursor:pointer;
   font-size:0.95rem;line-height:1;padding:0 2px;}
 .comment-card .del:hover{color:var(--red);}
+.comment-card .stale-warn{font-size:0.66rem;color:var(--yellow);font-weight:600;
+  background:rgba(247,221,161,0.12);border:1px solid rgba(247,221,161,0.3);
+  border-radius:3px;padding:1px 5px;}
 #comments-empty{color:var(--bg-500);font-size:0.82rem;text-align:center;padding:24px 12px;line-height:1.6;}
 
 /* selection popover */
@@ -248,7 +285,7 @@ body{
 
 /* comment source tag */
 .comment-card .src-tag{display:inline-block;font-size:0.66rem;font-weight:600;letter-spacing:.04em;
-  text-transform:uppercase;border-radius:4px;padding:1px 6px;margin-bottom:6px;}
+  text-transform:uppercase;border-radius:4px;padding:1px 6px;}
 .comment-card .src-tag.diff{background:var(--bb-800);color:var(--bb-200);}
 
 /* toast */
@@ -278,11 +315,599 @@ body{
 }
 #diff-render .diff-line.add mark.has-comment{background:rgba(0,170,90,.34);outline-color:rgba(0,170,90,.7);}
 #diff-render .diff-line.del mark.has-comment{background:rgba(224,90,75,.40);outline-color:rgba(224,90,75,.75);}
+
+/* share-page banner */
+#share-banner{
+  background:var(--bb-900);color:var(--bb-200);padding:6px 20px;font-size:0.76rem;
+  text-align:center;border-bottom:1px solid var(--bb-800);flex-shrink:0;
+}
+#share-banner strong{color:var(--bb-300);}
+
+/* author prompt overlay */
+#author-prompt{
+  position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;
+  align-items:center;justify-content:center;
+}
+#author-prompt.hidden{display:none;}
+#author-prompt .box{
+  background:var(--bg-800);border:1px solid var(--bg-600);border-radius:10px;padding:28px 32px;
+  width:360px;text-align:center;
+}
+#author-prompt h3{font-size:1.05rem;margin-bottom:6px;color:var(--bg-100);}
+#author-prompt p{font-size:0.8rem;color:var(--bg-400);margin-bottom:16px;}
+#author-prompt input{
+  width:100%;background:var(--bg-900);border:1px solid var(--bg-600);border-radius:6px;
+  color:var(--bg-100);font-size:0.9rem;padding:8px 12px;outline:none;font-family:inherit;
+  margin-bottom:14px;
+}
+#author-prompt input:focus{border-color:var(--bb-400);}
+#author-prompt button{
+  background:var(--bb-500);border:none;color:#fff;padding:8px 24px;border-radius:6px;
+  font-size:0.86rem;font-weight:600;cursor:pointer;
+}
+#author-prompt button:hover{background:var(--bb-400);}
+
+/* export box (share page) */
+#export-box{
+  display:none;margin:10px;padding:12px;background:var(--bg-800);border:1px solid var(--green);
+  border-radius:8px;
+}
+#export-box.open{display:block;}
+#export-box h4{font-size:0.82rem;color:var(--green);margin-bottom:8px;}
+#export-box p{font-size:0.74rem;color:var(--bg-400);margin-bottom:8px;}
+#export-box textarea{
+  width:100%;height:120px;resize:vertical;background:var(--bg-900);border:1px solid var(--bg-600);
+  border-radius:5px;color:var(--bg-100);font-size:0.76rem;padding:7px;outline:none;
+  font-family:"JetBrains Mono","Fira Code",Consolas,monospace;
+}
+#export-box .copy-btn{
+  margin-top:7px;background:var(--bg-700);border:1px solid var(--bg-600);color:var(--bg-200);
+  border-radius:5px;padding:5px 14px;font-size:0.78rem;cursor:pointer;
+}
+#export-box .copy-btn:hover{background:var(--bg-600);color:var(--bg-100);}
 """
 
 
+# ---------------------------------------------------------------------------
+# Core viewer JS — shared by both the live page and the standalone share page.
+# This is the rendering/display logic that operates on a global ``state``
+# object. It references addComment(), deleteComment(), and clearOldRounds()
+# which are defined by the mode-specific JS (_live_js / _share_js).  In JS,
+# function declarations are hoisted, so the references resolve at call time
+# (from event-handler callbacks), not at script-execution time.
+# ---------------------------------------------------------------------------
+
+
+def _core_viewer_js() -> str:
+    return """
+marked.setOptions({ gfm:true, breaks:false });
+const renderer = new marked.Renderer();
+renderer.code = function(code, lang) {
+  const language = (lang||'').toLowerCase().trim();
+  try {
+    const h = (language && hljs.getLanguage(language))
+      ? hljs.highlight(code, {language}).value : hljs.highlightAuto(code).value;
+    return `<pre><code class="hljs language-${language||'plaintext'}">${h}</code></pre>`;
+  } catch(_) { return `<pre><code class="hljs">${escapeHtml(code)}</code></pre>`; }
+};
+marked.use({ renderer });
+
+function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+const mdRender   = document.getElementById('md-render');
+const diffRender = document.getElementById('diff-render');
+const toastEl    = document.getElementById('toast');
+let toastTimer = null;
+function toast(msg, kind){
+  toastEl.textContent = msg;
+  toastEl.classList.toggle('ok', kind==='ok');
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>toastEl.classList.remove('show'), kind==='ok'?2800:2200);
+}
+
+// ── State ────────────────────────────────────────────────────────────
+let state = { version:-1, current_text:'', edits:[], comments:[], submitted:false };
+let view = 'rendered';
+
+// ── View toggle ──────────────────────────────────────────────────────
+document.getElementById('view-rendered').addEventListener('click',()=>setView('rendered'));
+document.getElementById('view-diff').addEventListener('click',()=>setView('diff'));
+function setView(v){
+  view=v;
+  document.getElementById('view-rendered').classList.toggle('active',v==='rendered');
+  document.getElementById('view-diff').classList.toggle('active',v==='diff');
+  mdRender.style.display   = v==='rendered'?'block':'none';
+  diffRender.style.display = v==='diff'?'block':'none';
+}
+
+// ── Change highlighting (diff & patch top-level blocks) ──────────────
+const changedEls = new Set();
+let clearTimer = null;
+function scheduleClear(){
+  clearTimeout(clearTimer);
+  clearTimer=setTimeout(()=>{
+    changedEls.forEach(el=>{
+      el.classList.add('fading');
+      el.addEventListener('transitionend',()=>{el.classList.remove('changed','fading');changedEls.delete(el);},{once:true});
+    });
+  }, 8000);
+}
+function diffAndPatch(container, newHtml){
+  const scratch=document.createElement('div'); scratch.innerHTML=newHtml;
+  const oldC=Array.from(container.childNodes), newC=Array.from(scratch.childNodes);
+  const max=Math.max(oldC.length,newC.length); let n=0;
+  for(let i=0;i<max;i++){
+    const o=oldC[i], w=newC[i];
+    if(!o){const im=w.cloneNode(true);container.appendChild(im);if(im.nodeType===1){im.classList.add('changed');changedEls.add(im);n++;}}
+    else if(!w){container.removeChild(o);n++;}
+    else if(o.nodeType!==w.nodeType||o.nodeName!==w.nodeName||(o.outerHTML||o.textContent)!==(w.outerHTML||w.textContent)){
+      const im=w.cloneNode(true);container.replaceChild(im,o);
+      if(im.nodeType===1){im.classList.add('changed');changedEls.add(im);n++;}
+    }
+  }
+  if(n>0) scheduleClear();
+  return n;
+}
+
+// ── Render diff view (grouped by round) ──────────────────────────────
+const roundCollapse = new Map();   // round number -> bool (user override)
+function renderDiff(){
+  if(!state.edits.length){
+    diffRender.innerHTML='<div id="diff-empty">No edits to display.</div>';
+    return;
+  }
+  // Group edits by round.
+  const byRound=new Map();
+  for(const e of state.edits){
+    const r=e.round||1;
+    if(!byRound.has(r)) byRound.set(r, []);
+    byRound.get(r).push(e);
+  }
+  const rounds=[...byRound.keys()].sort((a,b)=>b-a);   // newest first
+  const current=state.current_round||rounds[0];
+  const hasOld=rounds.some(r=>r!==current);
+
+  const parts=[];
+  if(hasOld){
+    parts.push('<div id="diff-toolbar"><button id="clear-old-rounds">Clear old rounds</button>'
+      +'<span class="hint">'+rounds.length+' rounds shown</span></div>');
+  }
+  for(const r of rounds){
+    const edits=byRound.get(r);
+    const isCurrent=(r===current);
+    // Default: current round expanded, older rounds collapsed; user can override.
+    const collapsed=roundCollapse.has(r) ? roundCollapse.get(r) : !isCurrent;
+    const blocks=[];
+    for(const e of edits){
+      const lines=(e.diff||'').split('\\n');
+      const body=[];
+      for(const ln of lines){
+        if(ln.startsWith('+++')||ln.startsWith('---')) continue;
+        let cls='ctx';
+        if(ln.startsWith('@@')) cls='hunk';
+        else if(ln.startsWith('+')) cls='add';
+        else if(ln.startsWith('-')) cls='del';
+        // data-round lets a selection in this view be anchored to its round.
+        body.push(`<div class="diff-line ${cls}" data-round="${r}">${escapeHtml(ln||' ')}</div>`);
+      }
+      blocks.push(`<div class="edit-block">${body.join('')}</div>`);
+    }
+    const ts=new Date(edits[edits.length-1].ts*1000).toLocaleTimeString();
+    parts.push(
+      `<div class="round-group ${isCurrent?'current':''} ${collapsed?'collapsed':''}" data-round="${r}">`
+      +`<div class="round-head" data-round="${r}">`
+      +`<span class="caret">\u25b8</span>`
+      +`<span class="n">Round ${r}</span>`
+      +`<span class="round-meta">${edits.length} edit${edits.length!==1?'s':''} \u00b7 ${ts}</span>`
+      +(isCurrent?'<span class="badge">latest</span>':'')
+      +`</div><div class="round-body">${blocks.join('')}</div></div>`
+    );
+  }
+  diffRender.innerHTML=parts.join('');
+
+  // Wire up collapse toggles.
+  diffRender.querySelectorAll('.round-head').forEach(h=>{
+    h.addEventListener('click',()=>{
+      const r=+h.dataset.round;
+      const grp=h.parentElement;
+      const nowCollapsed=grp.classList.toggle('collapsed');
+      roundCollapse.set(r, nowCollapsed);
+    });
+  });
+  const clearBtn=document.getElementById('clear-old-rounds');
+  if(clearBtn) clearBtn.addEventListener('click',clearOldRounds);
+  applyDiffCommentHighlights();
+}
+
+// ── Render document ──────────────────────────────────────────────────
+function renderDoc(patch){
+  const html=marked.parse(state.current_text||'');
+  if(patch && mdRender.childNodes.length){
+    unwrapCommentMarks(mdRender);
+    const n=diffAndPatch(mdRender, html);
+    if(n>0) toast('\u21bb document updated ('+n+' block'+(n!==1?'s':'')+')');
+  } else {
+    mdRender.innerHTML=html;
+  }
+  applyCommentHighlights();
+}
+
+function unwrapCommentMarks(root){
+  root.querySelectorAll('mark.has-comment').forEach(m=>{
+    const p=m.parentNode; while(m.firstChild) p.insertBefore(m.firstChild,m);
+    p.removeChild(m); p.normalize();
+  });
+}
+function wrapQuotes(root, quotes){
+  if(!quotes.length) return;
+  quotes=[...quotes].sort((a,b)=>b.length-a.length);
+  const collect=()=>{
+    const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
+      acceptNode(n){ return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }
+    });
+    const nodes=[]; while(walk.nextNode()) nodes.push(walk.currentNode);
+    return nodes;
+  };
+  const wrapNode=(node,q)=>{
+    const text=node.nodeValue;
+    let idx=text.indexOf(q);
+    if(idx<0) return;
+    const frag=document.createDocumentFragment();
+    let last=0;
+    while(idx>=0){
+      if(idx>last) frag.appendChild(document.createTextNode(text.slice(last,idx)));
+      const mk=document.createElement('mark');
+      mk.className='has-comment';
+      mk.textContent=text.slice(idx,idx+q.length);
+      frag.appendChild(mk);
+      last=idx+q.length;
+      idx=text.indexOf(q,last);
+    }
+    if(last<text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  };
+  for(const q of quotes){
+    for(const node of collect()){
+      if(node.parentNode) wrapNode(node,q);
+    }
+  }
+}
+
+function applyCommentHighlights(){
+  unwrapCommentMarks(mdRender);
+  const quotes=[...new Set(
+    state.comments.filter(c=>c.source==='doc'&&c.quote).map(c=>c.quote)
+  )];
+  wrapQuotes(mdRender, quotes);
+}
+
+function applyDiffCommentHighlights(){
+  unwrapCommentMarks(diffRender);
+  const byRound=new Map();
+  for(const c of state.comments){
+    if(c.source!=='diff'||!c.round||!c.quote) continue;
+    if(!byRound.has(c.round)) byRound.set(c.round, new Set());
+    byRound.get(c.round).add(c.quote);
+  }
+  for(const [round, quotes] of byRound){
+    const grp=diffRender.querySelector('.round-group[data-round="'+round+'"]');
+    if(grp) wrapQuotes(grp, [...quotes]);
+  }
+}
+
+// ── Comments ─────────────────────────────────────────────────────────
+function renderComments(){
+  const list=document.getElementById('comments-list');
+  document.getElementById('comment-count').textContent=state.comments.length;
+  if(!state.comments.length){
+    list.innerHTML='<div id="comments-empty">Select any text in the document to attach a comment, '
+      +'or use the box below for a general note.</div>';
+    return;
+  }
+  list.innerHTML=state.comments.map(c=>{
+    const tag=c.source==='diff'
+      ? `<span class="src-tag diff">Round ${c.round} diff</span>`
+      : '';
+    const authorTag=c.author?`<span class="author">${escapeHtml(c.author)}</span>`:'';
+    const staleTag=c.stale?`<span class="stale-warn" title="The text this comment references has changed since it was made.">\u26a0 changed</span>`:'';
+    const q=c.quote
+      ? `<div class="quote">${escapeHtml(c.quote)}</div>`
+      : `<div class="quote empty">general comment</div>`;
+    return `<div class="comment-card"><button class="del" data-id="${c.id}" title="Delete">\u00d7</button>`
+      +`<div class="comment-meta">${authorTag}${staleTag}${tag}</div>${q}<div class="body">${escapeHtml(c.body)}</div></div>`;
+  }).join('');
+  list.querySelectorAll('.del').forEach(b=>b.addEventListener('click',()=>deleteComment(+b.dataset.id)));
+}
+
+// general comment box
+document.getElementById('general-add').addEventListener('click',()=>{
+  const ta=document.getElementById('general-input');
+  if(ta.value.trim()){ addComment(ta.value,'','',''); ta.value=''; }
+});
+
+// ── Selection \u2192 popover ──────────────────────────────────────────
+const pop=document.getElementById('sel-popover');
+const selQuoteEl=document.getElementById('sel-quote');
+const selInput=document.getElementById('sel-input');
+let pendingSel=null;
+
+document.getElementById('content-area').addEventListener('mouseup',(e)=>{
+  if(pop.contains(e.target)) return;
+  setTimeout(()=>maybeShowPopover(e),0);
+});
+function maybeShowPopover(e){
+  const sel=window.getSelection();
+  const text=sel.toString();
+  if(!text || !text.trim()){ hidePopover(); return; }
+
+  let source='doc', round=0, before='', after='';
+  if(view==='rendered'){
+    const idx=state.current_text.indexOf(text);
+    if(idx>=0){ before=state.current_text.slice(Math.max(0,idx-60),idx);
+                 after=state.current_text.slice(idx+text.length, idx+text.length+60); }
+  } else {
+    source='diff';
+    let node=sel.anchorNode;
+    while(node && node.nodeType!==1) node=node.parentElement;
+    const line=node && node.closest ? node.closest('.diff-line, .round-group') : null;
+    if(line && line.dataset && line.dataset.round) round=+line.dataset.round;
+  }
+
+  pendingSel={quote:text,before,after,source,round};
+  selQuoteEl.textContent=(source==='diff'&&round?`[Round ${round}] `:'')
+    +(text.length>200?text.slice(0,200)+'\u2026':text);
+  selInput.value='';
+  const area=document.getElementById('content-area');
+  const rect=area.getBoundingClientRect();
+  let x=e.clientX-rect.left+area.scrollLeft;
+  let y=e.clientY-rect.top+area.scrollTop+10;
+  x=Math.min(x, area.scrollLeft+area.clientWidth-320);
+  pop.style.left=Math.max(8,x)+'px'; pop.style.top=y+'px';
+  pop.classList.add('open'); selInput.focus();
+}
+function hidePopover(){ pop.classList.remove('open'); pendingSel=null; }
+document.getElementById('sel-cancel').addEventListener('click',hidePopover);
+document.getElementById('sel-save').addEventListener('click',()=>{
+  if(pendingSel && selInput.value.trim()){
+    addComment(selInput.value,pendingSel.quote,pendingSel.before,pendingSel.after,
+               pendingSel.source,pendingSel.round);
+  }
+  hidePopover();
+});
+selInput.addEventListener('keydown',(e)=>{
+  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){ document.getElementById('sel-save').click(); }
+  if(e.key==='Escape') hidePopover();
+});
+""".lstrip()
+
+
+# ---------------------------------------------------------------------------
+# Live (server-connected) backend JS — fetches from the HTTP daemon.
+# ---------------------------------------------------------------------------
+
+
+def _live_js(name: str) -> str:
+    return (
+        """
+// ── Live backend: server-connected ───────────────────────────────────
+"""
+        + f"const DOC_NAME = {_script_json(name)};\n"
+        + """
+async function clearOldRounds(){
+  await fetch('/api/diffs/clear',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({keep_current:true})});
+  await refresh();
+  toast('Cleared older rounds', 'ok');
+}
+
+async function addComment(body, quote, before, after, source, round){
+  if(!body.trim()) return;
+  await fetch('/api/comment',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({body,quote:quote||'',context_before:before||'',context_after:after||'',
+      source:source||'doc',round:round||0})});
+  await refresh();
+  toast('Comment added');
+}
+async function deleteComment(id){
+  await fetch('/api/comment/delete',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id})});
+  await refresh();
+}
+
+// ── Send to LLM ──────────────────────────────────────────────────────
+document.getElementById('send-btn').addEventListener('click',async()=>{
+  const n=state.comments.length;
+  await fetch('/api/submit',{method:'POST'});
+  toast(n>0
+    ? '\u2713 Sent '+n+' comment'+(n!==1?'s':'')+' to the LLM'
+    : '\u2713 Approved \u2014 sent to the LLM with no comments', 'ok');
+});
+
+// ── Share button ─────────────────────────────────────────────────────
+document.getElementById('share-btn').addEventListener('click', async()=>{
+  try{
+    const r=await fetch('/api/share');
+    const html=await r.text();
+    const blob=new Blob([html],{type:'text/html'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=DOC_NAME.replace(/\\.md$/,'')+'.share.html';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast('Share file downloaded \u2014 send it to your reviewer','ok');
+  }catch(_){ toast('Failed to generate share file'); }
+});
+
+// ── State sync ───────────────────────────────────────────────────────
+async function refresh(){
+  const r=await fetch('/api/state'); const s=await r.json();
+  const firstLoad = state.version < 0;
+  const docChanged = s.current_text !== state.current_text;
+  const verChanged = s.version !== state.version;
+  state=s;
+  if(firstLoad || docChanged) renderDoc(!firstLoad && docChanged);
+  if(firstLoad || verChanged) renderDiff();
+  renderComments();
+  applyCommentHighlights();
+  applyDiffCommentHighlights();
+  document.getElementById('doc-meta').textContent =
+    state.edits.length+' edit'+(state.edits.length!==1?'s':'');
+}
+
+async function poll(){
+  while(true){
+    try{
+      const r=await fetch('/api/poll?v='+state.version,{signal:AbortSignal.timeout(30000)});
+      if(r.ok){ const d=await r.json(); if(d.version!==state.version) await refresh(); }
+    }catch(_){ await new Promise(r=>setTimeout(r,1000)); }
+  }
+}
+
+refresh().then(poll);
+""".lstrip()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Standalone (share) backend JS — all in-memory, no server.
+# ---------------------------------------------------------------------------
+
+
+def _share_js(snapshot: dict) -> str:
+    name = snapshot.get("name", "document.md")
+    return (
+        """
+// ── Share backend: standalone, no server ─────────────────────────────
+"""
+        + f"const DOC_NAME = {_script_json(name)};\n"
+        + f"const INITIAL_STATE = {_script_json(snapshot)};\n"
+        + """
+let nextCommentId = 1;
+let authorName = localStorage.getItem('mdedit-author') || '';
+
+// ── Author prompt ────────────────────────────────────────────────────
+function promptAuthor(){
+  if(authorName) return;
+  document.getElementById('author-prompt').classList.remove('hidden');
+  const input=document.getElementById('author-input');
+  input.focus();
+  document.getElementById('author-save').addEventListener('click',()=>{
+    authorName = input.value.trim() || 'Anonymous';
+    localStorage.setItem('mdedit-author', authorName);
+    document.getElementById('author-prompt').classList.add('hidden');
+  });
+  input.addEventListener('keydown',(e)=>{
+    if(e.key==='Enter') document.getElementById('author-save').click();
+  });
+}
+
+async function clearOldRounds(){
+  // Keep only the current round's edits in local state.
+  const cur=state.current_round||1;
+  state.edits=state.edits.filter(e=>(e.round||1)===cur);
+  renderDiff();
+  toast('Cleared older rounds','ok');
+}
+
+async function addComment(body, quote, before, after, source, round){
+  if(!body.trim()) return;
+  state.comments.push({
+    id:nextCommentId++,
+    body:body,
+    quote:quote||'',
+    context_before:before||'',
+    context_after:after||'',
+    source:source||'doc',
+    round:round||0,
+    author:authorName||'Anonymous',
+    stale:false
+  });
+  renderComments();
+  applyCommentHighlights();
+  applyDiffCommentHighlights();
+  toast('Comment added');
+}
+
+async function deleteComment(id){
+  state.comments=state.comments.filter(c=>c.id!==id);
+  renderComments();
+  applyCommentHighlights();
+  applyDiffCommentHighlights();
+}
+
+// ── Export comments ──────────────────────────────────────────────────
+document.getElementById('send-btn').addEventListener('click',()=>{
+  const exportData={
+    doc_name:DOC_NAME,
+    exported_at:new Date().toISOString(),
+    comments:state.comments.map(c=>({
+      body:c.body,
+      quote:c.quote,
+      context_before:c.context_before,
+      context_after:c.context_after,
+      source:c.source,
+      round:c.round,
+      author:c.author||'Anonymous'
+    }))
+  };
+  const json=JSON.stringify(exportData,null,2);
+  // Download
+  const blob=new Blob([json],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=DOC_NAME.replace(/\\.md$/,'')+'.comments.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  // Also show in copy-paste box
+  const box=document.getElementById('export-box');
+  box.classList.add('open');
+  document.getElementById('export-json').value=json;
+  const n=state.comments.length;
+  toast(n>0
+    ? '\u2713 Exported '+n+' comment'+(n!==1?'s':'')+' \u2014 download or copy below'
+    : '\u2713 No comments to export','ok');
+});
+
+// Copy-to-clipboard button
+document.getElementById('copy-json').addEventListener('click',()=>{
+  const ta=document.getElementById('export-json');
+  ta.select();
+  try{ document.execCommand('copy'); toast('Copied to clipboard','ok'); }
+  catch(_){ toast('Copy failed \u2014 select and copy manually'); }
+});
+
+// ── Init from embedded snapshot ──────────────────────────────────────
+function init(){
+  state=INITIAL_STATE;
+  state.version=0;
+  renderDoc(false);
+  renderDiff();
+  renderComments();
+  applyCommentHighlights();
+  applyDiffCommentHighlights();
+  document.getElementById('doc-meta').textContent=
+    state.edits.length+' edit'+(state.edits.length!==1?'s':'')+' (review-only)';
+  promptAuthor();
+}
+init();
+""".lstrip()
+    )
+
+
+# ---------------------------------------------------------------------------
+# HTML page builders
+# ---------------------------------------------------------------------------
+
+
 def build_html(name: str) -> str:
-    """The single-page front-end. State is fetched from the server via JSON."""
+    """The single-page front-end for the live viewer.
+
+    State is fetched from the server via JSON. The top bar includes a Share
+    button that downloads a standalone HTML copy for offline review.
+    """
     css = VALSTRO_CSS
     safe_name = name.replace("<", "&lt;").replace('"', "&quot;")
     return f"""<!DOCTYPE html>
@@ -305,6 +930,7 @@ def build_html(name: str) -> str:
     <button id="view-rendered" class="active">Rendered</button>
     <button id="view-diff">Changes</button>
   </div>
+  <button id="share-btn" title="Download a standalone HTML copy for offline review">Share</button>
   <button id="send-btn" title="Return all comments to the LLM">Send to LLM</button>
 </div>
 
@@ -344,404 +970,107 @@ def build_html(name: str) -> str:
 <div id="toast"></div>
 
 <script>
-const DOC_NAME = {_script_json(name)};
+{_core_viewer_js()}
 
-marked.setOptions({{ gfm:true, breaks:false }});
-const renderer = new marked.Renderer();
-renderer.code = function(code, lang) {{
-  const language = (lang||'').toLowerCase().trim();
-  try {{
-    const h = (language && hljs.getLanguage(language))
-      ? hljs.highlight(code, {{language}}).value : hljs.highlightAuto(code).value;
-    return `<pre><code class="hljs language-${{language||'plaintext'}}">${{h}}</code></pre>`;
-  }} catch(_) {{ return `<pre><code class="hljs">${{escapeHtml(code)}}</code></pre>`; }}
-}};
-marked.use({{ renderer }});
+{_live_js(name)}
+</script>
+</body></html>
+"""
 
-function escapeHtml(s){{return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}}
 
-const mdRender   = document.getElementById('md-render');
-const diffRender = document.getElementById('diff-render');
-const toastEl    = document.getElementById('toast');
-let toastTimer = null;
-function toast(msg, kind){{
-  toastEl.textContent = msg;
-  toastEl.classList.toggle('ok', kind==='ok');
-  toastEl.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer=setTimeout(()=>toastEl.classList.remove('show'), kind==='ok'?2800:2200);
-}}
+def build_share_html(snapshot: dict) -> str:
+    """Produce a self-contained standalone HTML page for offline review.
 
-// ── State ────────────────────────────────────────────────────────────
-let state = {{ version:-1, current_text:'', edits:[], comments:[], submitted:false }};
-let view = 'rendered';
+    The document snapshot (text, diff history, metadata) and the JS libraries
+    are inlined so the page works with no server. Comments are exported as a
+    downloadable JSON file and/or a copy-paste text box.
+    """
+    css = VALSTRO_CSS
+    name = snapshot.get("name", "document.md")
+    safe_name = name.replace("<", "&lt;").replace('"', "&quot;")
+    return f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{safe_name} — review (shared)</title>
+{_inline_or_url("highlight-onedark.min.css", "style")}
+{_inline_or_url("highlight.min.js", "script")}
+{_inline_or_url("marked.min.js", "script")}
+<style>{css}</style>
+</head><body>
 
-// ── View toggle ──────────────────────────────────────────────────────
-document.getElementById('view-rendered').addEventListener('click',()=>setView('rendered'));
-document.getElementById('view-diff').addEventListener('click',()=>setView('diff'));
-function setView(v){{
-  view=v;
-  document.getElementById('view-rendered').classList.toggle('active',v==='rendered');
-  document.getElementById('view-diff').classList.toggle('active',v==='diff');
-  mdRender.style.display   = v==='rendered'?'block':'none';
-  diffRender.style.display = v==='diff'?'block':'none';
-}}
+<div id="author-prompt" class="hidden">
+  <div class="box">
+    <h3>Who's reviewing?</h3>
+    <p>Enter your name so comments are attributed correctly.</p>
+    <input id="author-input" type="text" placeholder="Your name" value="">
+    <button id="author-save">Start reviewing</button>
+  </div>
+</div>
 
-// ── Change highlighting (diff & patch top-level blocks) ──────────────
-const changedEls = new Set();
-let clearTimer = null;
-function scheduleClear(){{
-  clearTimeout(clearTimer);
-  clearTimer=setTimeout(()=>{{
-    changedEls.forEach(el=>{{
-      el.classList.add('fading');
-      el.addEventListener('transitionend',()=>{{el.classList.remove('changed','fading');changedEls.delete(el);}},{{once:true}});
-    }});
-  }}, 8000);
-}}
-function diffAndPatch(container, newHtml){{
-  const scratch=document.createElement('div'); scratch.innerHTML=newHtml;
-  const oldC=Array.from(container.childNodes), newC=Array.from(scratch.childNodes);
-  const max=Math.max(oldC.length,newC.length); let n=0;
-  for(let i=0;i<max;i++){{
-    const o=oldC[i], w=newC[i];
-    if(!o){{const im=w.cloneNode(true);container.appendChild(im);if(im.nodeType===1){{im.classList.add('changed');changedEls.add(im);n++;}}}}
-    else if(!w){{container.removeChild(o);n++;}}
-    else if(o.nodeType!==w.nodeType||o.nodeName!==w.nodeName||(o.outerHTML||o.textContent)!==(w.outerHTML||w.textContent)){{
-      const im=w.cloneNode(true);container.replaceChild(im,o);
-      if(im.nodeType===1){{im.classList.add('changed');changedEls.add(im);n++;}}
-    }}
-  }}
-  if(n>0) scheduleClear();
-  return n;
-}}
+<div id="top-bar">
+  <div class="logo-bar"></div>
+  <span class="doc-name" id="doc-name">{safe_name}</span>
+  <span class="meta" id="doc-meta"></span>
+  <span class="spacer"></span>
+  <div class="toggle-group">
+    <button id="view-rendered" class="active">Rendered</button>
+    <button id="view-diff">Changes</button>
+  </div>
+  <button id="send-btn" title="Export your comments as JSON">Export comments</button>
+</div>
 
-// ── Render diff view (grouped by round) ──────────────────────────────
-const roundCollapse = new Map();   // round number -> bool (user override)
-function renderDiff(){{
-  if(!state.edits.length){{
-    diffRender.innerHTML='<div id="diff-empty">No edits yet. When the assistant '
-      +'edits the document, each round of changes appears here.</div>';
-    return;
-  }}
-  // Group edits by round.
-  const byRound=new Map();
-  for(const e of state.edits){{
-    const r=e.round||1;
-    if(!byRound.has(r)) byRound.set(r, []);
-    byRound.get(r).push(e);
-  }}
-  const rounds=[...byRound.keys()].sort((a,b)=>b-a);   // newest first
-  const current=state.current_round||rounds[0];
-  const hasOld=rounds.some(r=>r!==current);
+<div id="share-banner">
+  <strong>Review-only copy.</strong> Your comments are not sent live —
+  click <strong>Export comments</strong> when done and send the file back.
+</div>
 
-  const parts=[];
-  if(hasOld){{
-    parts.push('<div id="diff-toolbar"><button id="clear-old-rounds">Clear old rounds</button>'
-      +'<span class="hint">'+rounds.length+' rounds shown</span></div>');
-  }}
-  for(const r of rounds){{
-    const edits=byRound.get(r);
-    const isCurrent=(r===current);
-    // Default: current round expanded, older rounds collapsed; user can override.
-    const collapsed=roundCollapse.has(r) ? roundCollapse.get(r) : !isCurrent;
-    const blocks=[];
-    for(const e of edits){{
-      const lines=(e.diff||'').split('\\n');
-      const body=[];
-      for(const ln of lines){{
-        if(ln.startsWith('+++')||ln.startsWith('---')) continue;
-        let cls='ctx';
-        if(ln.startsWith('@@')) cls='hunk';
-        else if(ln.startsWith('+')) cls='add';
-        else if(ln.startsWith('-')) cls='del';
-        // data-round lets a selection in this view be anchored to its round.
-        body.push(`<div class="diff-line ${{cls}}" data-round="${{r}}">${{escapeHtml(ln||' ')}}</div>`);
-      }}
-      blocks.push(`<div class="edit-block">${{body.join('')}}</div>`);
-    }}
-    const ts=new Date(edits[edits.length-1].ts*1000).toLocaleTimeString();
-    parts.push(
-      `<div class="round-group ${{isCurrent?'current':''}} ${{collapsed?'collapsed':''}}" data-round="${{r}}">`
-      +`<div class="round-head" data-round="${{r}}">`
-      +`<span class="caret">▸</span>`
-      +`<span class="n">Round ${{r}}</span>`
-      +`<span class="round-meta">${{edits.length}} edit${{edits.length!==1?'s':''}} · ${{ts}}</span>`
-      +(isCurrent?'<span class="badge">latest</span>':'')
-      +`</div><div class="round-body">${{blocks.join('')}}</div></div>`
-    );
-  }}
-  diffRender.innerHTML=parts.join('');
+<div id="body">
+  <div id="content-area">
+    <div id="md-render"></div>
+    <div id="diff-render"></div>
+    <div id="sel-popover">
+      <div class="sel-quote" id="sel-quote"></div>
+      <textarea id="sel-input" placeholder="Comment on the selected text…"></textarea>
+      <div class="row">
+        <button class="cancel" id="sel-cancel">Cancel</button>
+        <button class="save" id="sel-save">Add comment</button>
+      </div>
+    </div>
+  </div>
+  <div id="comments-panel">
+    <div id="comments-header">Comments <span class="count" id="comment-count">0</span></div>
+    <div id="comments-list">
+      <div id="comments-empty">
+        Select any text in the document to attach a comment,
+        or use the box below for a general note.
+      </div>
+    </div>
+    <div style="padding:10px;border-top:1px solid var(--bg-700);">
+      <textarea id="general-input" placeholder="Add a general comment…"
+        style="width:100%;height:54px;resize:vertical;background:var(--bg-800);
+        border:1px solid var(--bg-600);border-radius:5px;color:var(--bg-100);
+        font-size:0.84rem;padding:7px;outline:none;font-family:inherit;"></textarea>
+      <button id="general-add" style="margin-top:7px;width:100%;background:var(--bg-700);
+        border:1px solid var(--bg-600);color:var(--bg-200);border-radius:5px;padding:6px;
+        font-size:0.8rem;cursor:pointer;">Add general comment</button>
+    </div>
+  </div>
+</div>
 
-  // Wire up collapse toggles.
-  diffRender.querySelectorAll('.round-head').forEach(h=>{{
-    h.addEventListener('click',()=>{{
-      const r=+h.dataset.round;
-      const grp=h.parentElement;
-      const nowCollapsed=grp.classList.toggle('collapsed');
-      roundCollapse.set(r, nowCollapsed);
-    }});
-  }});
-  const clearBtn=document.getElementById('clear-old-rounds');
-  if(clearBtn) clearBtn.addEventListener('click',clearOldRounds);
-  applyDiffCommentHighlights();
-}}
+<div id="export-box">
+  <h4>✓ Comments exported</h4>
+  <p>Send the downloaded file back, or copy the JSON below and paste it into chat.</p>
+  <textarea id="export-json" readonly></textarea>
+  <button class="copy-btn" id="copy-json">Copy to clipboard</button>
+</div>
 
-async function clearOldRounds(){{
-  await fetch('/api/diffs/clear',{{method:'POST',headers:{{'Content-Type':'application/json'}},
-    body:JSON.stringify({{keep_current:true}})}});
-  await refresh();
-  toast('Cleared older rounds', 'ok');
-}}
+<div id="toast"></div>
 
-// ── Render document ──────────────────────────────────────────────────
-// Renders only the rendered-document body. The Changes view (renderDiff) and
-// the top-bar edit-count meta are driven separately from refresh() so that
-// events which bump the version but leave the document text untouched — adding
-// or deleting a comment, clearing old rounds, submitting — don't re-patch the
-// DOM. Re-patching would otherwise compare blocks still flagged `changed`/
-// `fading` against clean re-parsed HTML and re-flash them, making the "changed
-// block" highlight (and a spurious "document updated" toast) come back every
-// time you comment.
-function renderDoc(patch){{
-  const html=marked.parse(state.current_text||'');
-  if(patch && mdRender.childNodes.length){{
-    // Strip any comment-highlight marks first so the block-level diff compares
-    // clean marked HTML against clean marked HTML (otherwise blocks carrying
-    // <mark> wrappers would be flagged as changed and re-flash on every edit).
-    unwrapCommentMarks(mdRender);
-    const n=diffAndPatch(mdRender, html);
-    if(n>0) toast('↻ document updated ('+n+' block'+(n!==1?'s':'')+')');
-  }} else {{
-    mdRender.innerHTML=html;
-  }}
-  applyCommentHighlights();
-}}
+<script>
+{_core_viewer_js()}
 
-// Highlight document selections that have a comment attached. Each comment
-// whose source is 'doc' carries a `quote` (the exact selected text); we wrap
-// every occurrence of that text inside the rendered document in a
-// <mark class="has-comment"> so the reader can see at a glance which spans
-// have feedback. Idempotent: it unwraps existing marks before re-applying.
-function unwrapCommentMarks(root){{
-  root.querySelectorAll('mark.has-comment').forEach(m=>{{
-    const p=m.parentNode; while(m.firstChild) p.insertBefore(m.firstChild,m);
-    p.removeChild(m); p.normalize();
-  }});
-}}
-// Wrap every occurrence of each `quotes` string inside `root`'s text nodes in
-// a <mark class="has-comment">. Longest quotes first so shorter substrings
-// don't steal their text nodes. Idempotent when the caller unwraps first.
-function wrapQuotes(root, quotes){{
-  if(!quotes.length) return;
-  quotes=[...quotes].sort((a,b)=>b.length-a.length);
-  // Collect live text nodes fresh for each quote. Wrapping a quote splits its
-  // text node (replaceChild with a fragment), so a snapshot taken once up
-  // front would point at detached nodes (parentNode === null) for the second
-  // quote — wrapping it would then throw and silently skip every later quote.
-  const collect=()=>{{
-    const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{{
-      acceptNode(n){{ return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }}
-    }});
-    const nodes=[]; while(walk.nextNode()) nodes.push(walk.currentNode);
-    return nodes;
-  }};
-  const wrapNode=(node,q)=>{{
-    const text=node.nodeValue;
-    let idx=text.indexOf(q);
-    if(idx<0) return;
-    const frag=document.createDocumentFragment();
-    let last=0;
-    while(idx>=0){{
-      if(idx>last) frag.appendChild(document.createTextNode(text.slice(last,idx)));
-      const mk=document.createElement('mark');
-      mk.className='has-comment';
-      mk.textContent=text.slice(idx,idx+q.length);
-      frag.appendChild(mk);
-      last=idx+q.length;
-      idx=text.indexOf(q,last);
-    }}
-    if(last<text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-    node.parentNode.replaceChild(frag,node);
-  }};
-  for(const q of quotes){{
-    for(const node of collect()){{
-      // A fresh collect() returns only live nodes, but guard anyway in case a
-      // sibling quote already replaced one earlier in this same pass.
-      if(node.parentNode) wrapNode(node,q);
-    }}
-  }}
-}}
-
-// Highlight document-view selections that have a comment attached. Each
-// comment whose source is 'doc' carries a `quote` (the exact selected text);
-// we wrap every occurrence in the rendered document so the reader can see at
-// a glance which spans have feedback.
-function applyCommentHighlights(){{
-  unwrapCommentMarks(mdRender);
-  const quotes=[...new Set(
-    state.comments.filter(c=>c.source==='doc'&&c.quote).map(c=>c.quote)
-  )];
-  wrapQuotes(mdRender, quotes);
-}}
-
-// Highlight diff-view selections that have a comment attached. A diff comment
-// is anchored to a specific round, so we scope the search to that round's
-// group and only wrap within its diff lines.
-function applyDiffCommentHighlights(){{
-  unwrapCommentMarks(diffRender);
-  // Group quotes by round so each is scoped to its own round-group element.
-  const byRound=new Map();
-  for(const c of state.comments){{
-    if(c.source!=='diff'||!c.round||!c.quote) continue;
-    if(!byRound.has(c.round)) byRound.set(c.round, new Set());
-    byRound.get(c.round).add(c.quote);
-  }}
-  for(const [round, quotes] of byRound){{
-    const grp=diffRender.querySelector('.round-group[data-round="'+round+'"]');
-    if(grp) wrapQuotes(grp, [...quotes]);
-  }}
-}}
-
-// ── Comments ─────────────────────────────────────────────────────────
-function renderComments(){{
-  const list=document.getElementById('comments-list');
-  document.getElementById('comment-count').textContent=state.comments.length;
-  if(!state.comments.length){{
-    list.innerHTML='<div id="comments-empty">Select any text in the document to attach a comment, '
-      +'or use the box below for a general note.</div>';
-    return;
-  }}
-  list.innerHTML=state.comments.map(c=>{{
-    const tag=c.source==='diff'
-      ? `<span class="src-tag diff">Round ${{c.round}} diff</span>`
-      : '';
-    const q=c.quote
-      ? `<div class="quote">${{escapeHtml(c.quote)}}</div>`
-      : `<div class="quote empty">general comment</div>`;
-    return `<div class="comment-card"><button class="del" data-id="${{c.id}}" title="Delete">×</button>`
-      +`${{tag}}${{q}}<div class="body">${{escapeHtml(c.body)}}</div></div>`;
-  }}).join('');
-  list.querySelectorAll('.del').forEach(b=>b.addEventListener('click',()=>deleteComment(+b.dataset.id)));
-}}
-
-async function addComment(body, quote, before, after, source, round){{
-  if(!body.trim()) return;
-  await fetch('/api/comment',{{method:'POST',headers:{{'Content-Type':'application/json'}},
-    body:JSON.stringify({{body,quote:quote||'',context_before:before||'',context_after:after||'',
-      source:source||'doc',round:round||0}})}});
-  await refresh();
-  toast('Comment added');
-}}
-async function deleteComment(id){{
-  await fetch('/api/comment/delete',{{method:'POST',headers:{{'Content-Type':'application/json'}},
-    body:JSON.stringify({{id}})}});
-  await refresh();
-}}
-
-// general comment box
-document.getElementById('general-add').addEventListener('click',()=>{{
-  const ta=document.getElementById('general-input');
-  if(ta.value.trim()){{ addComment(ta.value,'','',''); ta.value=''; }}
-}});
-
-// ── Selection → popover ──────────────────────────────────────────────
-const pop=document.getElementById('sel-popover');
-const selQuoteEl=document.getElementById('sel-quote');
-const selInput=document.getElementById('sel-input');
-let pendingSel=null;
-
-document.getElementById('content-area').addEventListener('mouseup',(e)=>{{
-  if(pop.contains(e.target)) return;
-  setTimeout(()=>maybeShowPopover(e),0);
-}});
-function maybeShowPopover(e){{
-  const sel=window.getSelection();
-  const text=sel.toString();
-  if(!text || !text.trim()){{ hidePopover(); return; }}
-
-  let source='doc', round=0, before='', after='';
-  if(view==='rendered'){{
-    // capture a little surrounding context from the full document text
-    const idx=state.current_text.indexOf(text);
-    if(idx>=0){{ before=state.current_text.slice(Math.max(0,idx-60),idx);
-                 after=state.current_text.slice(idx+text.length, idx+text.length+60); }}
-  }} else {{
-    // Changes view: anchor the comment to the round of the selected diff line.
-    source='diff';
-    let node=sel.anchorNode;
-    while(node && node.nodeType!==1) node=node.parentElement;
-    const line=node && node.closest ? node.closest('.diff-line, .round-group') : null;
-    if(line && line.dataset && line.dataset.round) round=+line.dataset.round;
-  }}
-
-  pendingSel={{quote:text,before,after,source,round}};
-  selQuoteEl.textContent=(source==='diff'&&round?`[Round ${{round}}] `:'')
-    +(text.length>200?text.slice(0,200)+'…':text);
-  selInput.value='';
-  const area=document.getElementById('content-area');
-  const rect=area.getBoundingClientRect();
-  let x=e.clientX-rect.left+area.scrollLeft;
-  let y=e.clientY-rect.top+area.scrollTop+10;
-  x=Math.min(x, area.scrollLeft+area.clientWidth-320);
-  pop.style.left=Math.max(8,x)+'px'; pop.style.top=y+'px';
-  pop.classList.add('open'); selInput.focus();
-}}
-function hidePopover(){{ pop.classList.remove('open'); pendingSel=null; }}
-document.getElementById('sel-cancel').addEventListener('click',hidePopover);
-document.getElementById('sel-save').addEventListener('click',()=>{{
-  if(pendingSel && selInput.value.trim()){{
-    addComment(selInput.value,pendingSel.quote,pendingSel.before,pendingSel.after,
-               pendingSel.source,pendingSel.round);
-  }}
-  hidePopover();
-}});
-selInput.addEventListener('keydown',(e)=>{{
-  if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){{ document.getElementById('sel-save').click(); }}
-  if(e.key==='Escape') hidePopover();
-}});
-
-// ── Send to LLM ──────────────────────────────────────────────────────
-document.getElementById('send-btn').addEventListener('click',async()=>{{
-  const n=state.comments.length;
-  await fetch('/api/submit',{{method:'POST'}});
-  toast(n>0
-    ? '✓ Sent '+n+' comment'+(n!==1?'s':'')+' to the LLM'
-    : '✓ Approved — sent to the LLM with no comments', 'ok');
-}});
-
-// ── State sync ───────────────────────────────────────────────────────
-async function refresh(){{
-  const r=await fetch('/api/state'); const s=await r.json();
-  const firstLoad = state.version < 0;
-  // Only re-patch the rendered document when its text actually changed.
-  // Comments, submits and diff-clears bump the version too; patching on those
-  // would re-flash every block still carrying the transient `changed` class.
-  const docChanged = s.current_text !== state.current_text;
-  const verChanged = s.version !== state.version;
-  state=s;
-  if(firstLoad || docChanged) renderDoc(!firstLoad && docChanged);
-  if(firstLoad || verChanged) renderDiff();
-  renderComments();
-  // Comment add/delete bumps the version but not the document text; re-apply
-  // highlights so new selections light up (and deleted ones clear) without
-  // re-rendering either view's body.
-  applyCommentHighlights();
-  applyDiffCommentHighlights();
-  document.getElementById('doc-meta').textContent =
-    state.edits.length+' edit'+(state.edits.length!==1?'s':'');
-}}
-
-async function poll(){{
-  while(true){{
-    try{{
-      const r=await fetch('/api/poll?v='+state.version,{{signal:AbortSignal.timeout(30000)}});
-      if(r.ok){{ const d=await r.json(); if(d.version!==state.version) await refresh(); }}
-    }}catch(_){{ await new Promise(r=>setTimeout(r,1000)); }}
-  }}
-}}
-
-refresh().then(poll);
+{_share_js(snapshot)}
 </script>
 </body></html>
 """
