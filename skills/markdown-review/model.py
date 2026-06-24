@@ -217,17 +217,74 @@ class Session:
                 self._cond.notify_all()
             return changed
 
-    def comment_exists(self, **kwargs) -> bool:
-        """Check whether a comment with the given field values already exists.
+    def import_comments(self, comments: list) -> dict:
+        """Merge an exported comment list into the session.
 
-        Used by ``import-comments`` to skip exact duplicates. Only the fields
-        passed as keyword arguments are compared.
+        Each item is a dict shaped like a ``Comment.to_dict()`` (minus ``id``).
+        Duplicates — identified by ``(author, quote, body, source, round)`` —
+        are skipped. Comments whose ``quote`` text no longer appears in the
+        current document are flagged ``stale``. Returns a summary dict matching
+        the ``mdedit.py import-comments`` contract::
+
+            {"imported": int, "skipped_duplicates": int,
+             "stale": int, "stale_ids": [int, ...]}
         """
-        with self.lock:
-            for c in self.comments:
-                if all(getattr(c, k) == v for k, v in kwargs.items()):
-                    return True
-            return False
+        imported, skipped, stale_ids = 0, 0, []
+        with self._cond:
+            current_text = self.current_text
+            existing = {
+                (c.author, c.quote, c.body, c.source, int(c.round or 0))
+                for c in self.comments
+            }
+            changed = False
+            for raw in comments:
+                if not isinstance(raw, dict):
+                    skipped += 1
+                    continue
+                body = raw.get("body", "")
+                if not isinstance(body, str):
+                    skipped += 1
+                    continue
+                quote = raw.get("quote", "")
+                key = (
+                    raw.get("author", "Anonymous"),
+                    quote,
+                    body,
+                    raw.get("source", "doc"),
+                    int(raw.get("round", 0) or 0),
+                )
+                if key in existing:
+                    skipped += 1
+                    continue
+                existing.add(key)
+                is_stale = bool(quote) and quote not in current_text
+                self._comment_seq += 1
+                c = Comment(
+                    id=self._comment_seq,
+                    body=body,
+                    quote=quote,
+                    context_before=raw.get("context_before", ""),
+                    context_after=raw.get("context_after", ""),
+                    source=raw.get("source", "doc"),
+                    round=int(raw.get("round", 0) or 0),
+                    author=raw.get("author", "Anonymous"),
+                    stale=is_stale,
+                )
+                self.comments.append(c)
+                if is_stale:
+                    stale_ids.append(c.id)
+                imported += 1
+                changed = True
+            if changed:
+                self.version += 1
+                self.last_activity = time.time()
+                self._cond.notify_all()
+        return {
+            "imported": imported,
+            "skipped_duplicates": skipped,
+            "stale": len(stale_ids),
+            "stale_ids": stale_ids,
+        }
 
     def submit(self) -> None:
         with self._cond:

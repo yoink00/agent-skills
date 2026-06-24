@@ -298,21 +298,36 @@ class TestComments:
         c = session.add_comment("note")
         assert c.stale is False
 
-    def test_comment_exists_finds_match(self, session):
-        session.add_comment("hi", quote="q", source="doc", author="Alice")
-        assert session.comment_exists(
-            body="hi", quote="q", source="doc", author="Alice"
+    def test_import_comments_merges_new(self, session):
+        summary = session.import_comments(
+            [{"body": "hi", "quote": "q", "source": "doc", "author": "Alice"}]
         )
+        assert summary["imported"] == 1
+        assert summary["skipped_duplicates"] == 0
+        assert [c.author for c in session.comments] == ["Alice"]
 
-    def test_comment_exists_returns_false_for_no_match(self, session):
-        session.add_comment("hi", quote="q", author="Alice")
-        assert not session.comment_exists(body="hi", quote="q", author="Bob")
-        assert not session.comment_exists(body="different")
+    def test_import_comments_skips_duplicates_by_identity(self, session):
+        session.import_comments([{"body": "hi", "quote": "q", "author": "Alice"}])
+        summary = session.import_comments(
+            [{"body": "hi", "quote": "q", "author": "Alice"}]
+        )
+        assert summary["imported"] == 0
+        assert summary["skipped_duplicates"] == 1
+        # Same body from a different author is kept.
+        summary2 = session.import_comments(
+            [{"body": "hi", "quote": "q", "author": "Bob"}]
+        )
+        assert summary2["imported"] == 1
 
-    def test_comment_exists_partial_fields(self, session):
-        session.add_comment("hi", author="Alice")
-        assert session.comment_exists(author="Alice")
-        assert not session.comment_exists(author="Bob")
+    def test_import_comments_flags_stale_quotes(self, session):
+        # Quote not present in the document text → stale.
+        summary = session.import_comments(
+            [{"body": "gone", "quote": "no such text", "author": "Alice"}]
+        )
+        assert summary["imported"] == 1
+        assert summary["stale"] == 1
+        assert session.comments[0].stale is True
+        assert session.comments[0].id in summary["stale_ids"]
 
 
 # ---------------------------------------------------------------------------

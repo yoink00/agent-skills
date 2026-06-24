@@ -223,16 +223,21 @@ people in parallel.
 ### Collecting comments back
 
 1. Your colleague opens the file in a browser, enters their name, adds
-   comments, and clicks **Export comments**. They send back the downloaded
-   `.comments.json` file.
+   comments, and clicks **Export comments**, then **Download JSON** (or copies
+   the JSON from the box). They send back the `.comments.json` file.
 
-2. Import the comments into the live session:
+2. Import the comments into the live session. Either from the **live viewer's**
+   **Import ▾** button (top bar) — **Import from File…** to pick the
+   `.comments.json`, or **Import Comments…** to paste JSON into a box — or from
+   the CLI:
 
    ```bash
    python3 "$MDEDIT" import-comments path/to/doc.md --from colleague.comments.json
    ```
 
-   Use `--from -` to read from stdin instead.
+   Use `--from -` to read from stdin instead. The in-browser import and the
+   CLI hit the same `/api/import` endpoint, so dedup and stale-flagging behave
+   identically.
 
 3. The output JSON reports how many comments were imported, how many were
    skipped as duplicates, and how many were flagged stale:

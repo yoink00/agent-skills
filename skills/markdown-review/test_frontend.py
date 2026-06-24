@@ -158,15 +158,28 @@ class TestBuildHtml:
         # Guard the IDs the JS hooks onto; renaming one silently breaks the UI.
         html = frontend.build_html("x.md")
         for anchor in (
-            "#md-render",
-            "#diff-render",
-            "#comments-list",
-            "#send-btn",
-            "#sel-popover",
-            "view-rendered",
-            "view-diff",
+            'id="md-render"',
+            'id="diff-render"',
+            'id="comments-list"',
+            'id="send-btn"',
+            'id="sel-popover"',
+            'id="view-rendered"',
+            'id="view-diff"',
+            'id="import-btn"',
+            'id="import-menu-text"',
+            'id="import-menu-file"',
+            'id="import-box"',
+            'id="import-apply"',
+            'id="import-file"',
         ):
             assert anchor in html, anchor
+
+    def test_has_import_dropdown(self):
+        # The live (originating) viewer is where exported comments come back.
+        html = frontend.build_html("x.md")
+        assert "Import \u25be" in html  # Import ▾ button
+        assert "Import Comments\u2026" in html
+        assert "Import from File\u2026" in html
 
     def test_name_independence(self):
         # Different names produce different titles but the same shell.
@@ -227,6 +240,18 @@ class TestBuildShareHtml:
     def test_has_share_banner(self):
         html = frontend.build_share_html(self._snapshot())
         assert "share-banner" in html
+
+    def test_has_no_import_ui(self):
+        # Importing belongs on the originating (live) viewer, which has a
+        # server to receive comments; the standalone share page has neither.
+        html = frontend.build_share_html(self._snapshot())
+        for anchor in (
+            'id="import-btn"',
+            'id="import-menu"',
+            'id="import-box"',
+            'id="import-file"',
+        ):
+            assert anchor not in html, anchor
 
     def test_no_server_api_calls(self):
         """The share page must not make any fetch('/api/...') calls."""
