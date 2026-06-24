@@ -197,6 +197,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = self._read_body()
             ok = self.session.delete_comment(int(data.get("id", -1)))
             self._json({"ok": ok})
+        elif path == "/api/import":
+            data = self._read_body()
+            # Accept either {"comments": [...]} or a bare [...].
+            payload = data.get("comments", []) if isinstance(data, dict) else data
+            if not isinstance(payload, list):
+                self._json({"ok": False, "error": "expected a comments array"}, 422)
+                return
+            summary = self.session.import_comments(payload)
+            self._json({"ok": True, **summary})
         elif path == "/api/diffs/clear":
             data = self._read_body()
             keep_current = bool(data.get("keep_current", True))

@@ -783,6 +783,86 @@ document.getElementById('share-btn').addEventListener('click', async()=>{
   }catch(_){ toast('Failed to generate share file'); }
 });
 
+// ── Import comments (from a reviewer's exported JSON) ────────────
+// The live viewer is where a colleague's exported comments come back: the
+// JSON is POSTed to /api/import, which dedupes and flags stale quotes
+// server-side, then we refresh the rendered state.
+function parseCommentsJson(text){
+  let data;
+  try{ data=JSON.parse(text); }
+  catch(_){ throw new Error('Not valid JSON'); }
+  if(!data) throw new Error('Empty payload');
+  const arr=Array.isArray(data)?data:data.comments;
+  if(!Array.isArray(arr)) throw new Error('No "comments" array found');
+  return arr;
+}
+
+async function postImport(payload){
+  const r=await fetch('/api/import',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({comments:payload})});
+  if(!r.ok) throw new Error('server returned '+r.status);
+  const s=await r.json();
+  if(!s.ok) throw new Error(s.error||'import failed');
+  await refresh();
+  return s;
+}
+
+function reportImport(s, fromName){
+  const skipped=s.skipped_duplicates? ' ('+s.skipped_duplicates+' duplicate'+(s.skipped_duplicates!==1?'s':'')+' skipped)':'';
+  const stale=s.stale? ', '+s.stale+' stale':'';
+  const where=fromName? ' from '+fromName:'';
+  toast('\u2713 Imported '+s.imported+' comment'+(s.imported!==1?'s':'')+skipped+stale+where,'ok');
+}
+
+// Dropdown toggle
+document.getElementById('import-btn').addEventListener('click',(e)=>{
+  e.stopPropagation();
+  document.getElementById('import-menu').classList.toggle('open');
+});
+document.addEventListener('click',()=>{
+  document.getElementById('import-menu').classList.remove('open');
+});
+document.getElementById('import-menu').addEventListener('click',(e)=>e.stopPropagation());
+
+// Import via paste box
+document.getElementById('import-menu-text').addEventListener('click',()=>{
+  document.getElementById('import-menu').classList.remove('open');
+  const box=document.getElementById('import-box');
+  box.classList.add('open');
+  const ta=document.getElementById('import-json');
+  ta.value=''; ta.focus();
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+});
+document.getElementById('import-cancel').addEventListener('click',()=>{
+  document.getElementById('import-box').classList.remove('open');
+});
+document.getElementById('import-apply').addEventListener('click',async()=>{
+  const ta=document.getElementById('import-json');
+  try{
+    const arr=parseCommentsJson(ta.value);
+    const s=await postImport(arr);
+    reportImport(s);
+    if(s.imported>0) document.getElementById('import-box').classList.remove('open');
+  }catch(err){ toast('Import failed: '+err.message); }
+});
+
+// Import via file picker
+document.getElementById('import-menu-file').addEventListener('click',()=>{
+  document.getElementById('import-menu').classList.remove('open');
+  document.getElementById('import-file').click();
+});
+document.getElementById('import-file').addEventListener('change',async(e)=>{
+  const file=e.target.files && e.target.files[0];
+  if(!file) return;
+  try{
+    const text=await file.text();
+    const arr=parseCommentsJson(text);
+    const s=await postImport(arr);
+    reportImport(s, file.name);
+  }catch(err){ toast('Import failed: '+err.message); }
+  e.target.value='';
+});
+
 // ── State sync ───────────────────────────────────────────────────────
 async function refresh(){
   const r=await fetch('/api/state'); const s=await r.json();
@@ -939,103 +1019,6 @@ document.getElementById('download-json').addEventListener('click',()=>{
   toast('Downloaded '+DOC_NAME.replace(/\\.md$/,'')+'.comments.json','ok');
 });
 
-// ── Import comments ──────────────────────────────
-// Merge a comments array into state.comments, deduping by
-// (author, quote, body, source, round). Returns {imported, skipped}.
-function mergeImported(incoming){
-  const key=c=>JSON.stringify([c.author||'Anonymous',c.quote||'',c.body||'',c.source||'',c.round||0]);
-  const existing=new Set(state.comments.map(key));
-  let imported=0, skipped=0;
-  for(const c of incoming){
-    if(!c||typeof c.body!=='string') continue;
-    const k=key(c);
-    if(existing.has(k)){ skipped++; continue; }
-    existing.add(k);
-    state.comments.push({
-      id:nextCommentId++,
-      body:c.body,
-      quote:c.quote||'',
-      context_before:c.context_before||'',
-      context_after:c.context_after||'',
-      source:c.source||'doc',
-      round:c.round||0,
-      author:c.author||'Anonymous',
-      stale:false
-    });
-    imported++;
-  }
-  renderComments();
-  applyCommentHighlights();
-  applyDiffCommentHighlights();
-  return {imported, skipped};
-}
-
-function parseCommentsJson(text){
-  let data;
-  try{ data=JSON.parse(text); }
-  catch(_){ throw new Error('Not valid JSON'); }
-  if(!data){ throw new Error('Empty payload'); }
-  const arr=Array.isArray(data)?data:data.comments;
-  if(!Array.isArray(arr)) throw new Error('No \"comments\" array found');
-  return arr;
-}
-
-// Dropdown toggle
-document.getElementById('import-btn').addEventListener('click',(e)=>{
-  e.stopPropagation();
-  document.getElementById('import-menu').classList.toggle('open');
-});
-document.addEventListener('click',()=>{
-  document.getElementById('import-menu').classList.remove('open');
-});
-document.getElementById('import-menu').addEventListener('click',(e)=>e.stopPropagation());
-
-// Import via paste box
-document.getElementById('import-menu-text').addEventListener('click',()=>{
-  document.getElementById('import-menu').classList.remove('open');
-  const box=document.getElementById('import-box');
-  box.classList.add('open');
-  const ta=document.getElementById('import-json');
-  ta.value=''; ta.focus();
-  box.scrollIntoView({behavior:'smooth',block:'nearest'});
-});
-document.getElementById('import-cancel').addEventListener('click',()=>{
-  document.getElementById('import-box').classList.remove('open');
-});
-document.getElementById('import-apply').addEventListener('click',()=>{
-  const ta=document.getElementById('import-json');
-  try{
-    const arr=parseCommentsJson(ta.value);
-    const {imported, skipped}=mergeImported(arr);
-    toast('\u2713 Imported '+imported+' comment'+(imported!==1?'s':'')+
-          (skipped? ' ('+skipped+' duplicate'+(skipped!==1?'s':'')+' skipped)':''), 'ok');
-    if(imported>0) document.getElementById('import-box').classList.remove('open');
-  }catch(err){ toast('Import failed: '+err.message); }
-});
-
-// Import via file picker
-document.getElementById('import-menu-file').addEventListener('click',()=>{
-  document.getElementById('import-menu').classList.remove('open');
-  document.getElementById('import-file').click();
-});
-document.getElementById('import-file').addEventListener('change',(e)=>{
-  const file=e.target.files && e.target.files[0];
-  if(!file) return;
-  const reader=new FileReader();
-  reader.onload=()=>{
-    try{
-      const arr=parseCommentsJson(String(reader.result||''));
-      const {imported, skipped}=mergeImported(arr);
-      toast('\u2713 Imported '+imported+' comment'+(imported!==1?'s':'')+
-            (skipped? ' ('+skipped+' duplicate'+(skipped!==1?'s':'')+' skipped)':'')+
-            ' from '+file.name,'ok');
-    }catch(err){ toast('Import failed: '+err.message); }
-  };
-  reader.onerror=()=>toast('Could not read '+file.name);
-  reader.readAsText(file);
-  e.target.value='';
-});
-
 // ── Init from embedded snapshot ──────────────────────────────────────
 function init(){
   state=INITIAL_STATE;
@@ -1088,8 +1071,26 @@ def build_html(name: str) -> str:
     <button id="view-diff">Changes</button>
   </div>
   <button id="share-btn" title="Download a standalone HTML copy for offline review">Share</button>
+  <div id="import-wrap">
+    <button id="import-btn" title="Import comments exported by a reviewer">Import ▾</button>
+    <div id="import-menu">
+      <button id="import-menu-text" title="Paste JSON into a text box">Import Comments…</button>
+      <button id="import-menu-file" title="Pick a .comments.json file">Import from File…</button>
+    </div>
+  </div>
   <button id="send-btn" title="Return all comments to the LLM">Send to LLM</button>
 </div>
+
+<div id="import-box">
+  <h4>Import comments</h4>
+  <p>Paste exported comment JSON below, then apply. Duplicates are skipped automatically.</p>
+  <textarea id="import-json" placeholder='{{"comments":[...]}}'></textarea>
+  <div class="actions">
+    <button class="primary" id="import-apply">Import</button>
+    <button id="import-cancel">Cancel</button>
+  </div>
+</div>
+<input type="file" id="import-file" accept="application/json,.json" style="display:none">
 
 <div id="body">
   <div id="content-area">
@@ -1175,13 +1176,6 @@ def build_share_html(snapshot: dict) -> str:
     <button id="view-diff">Changes</button>
   </div>
   <button id="send-btn" title="Show your comments as JSON to copy or download">Export comments</button>
-  <div id="import-wrap">
-    <button id="import-btn" title="Import comments from another reviewer">Import ▾</button>
-    <div id="import-menu">
-      <button id="import-menu-text" title="Paste JSON into a text box">Import Comments…</button>
-      <button id="import-menu-file" title="Pick a .comments.json file">Import from File…</button>
-    </div>
-  </div>
 </div>
 
 <div id="share-banner">
@@ -1231,17 +1225,6 @@ def build_share_html(snapshot: dict) -> str:
     <button class="download-btn" id="download-json">Download JSON</button>
   </div>
 </div>
-
-<div id="import-box">
-  <h4>Import comments</h4>
-  <p>Paste exported comment JSON below, then apply. Duplicates are skipped automatically.</p>
-  <textarea id="import-json" placeholder='{{"comments":[...]}}'></textarea>
-  <div class="actions">
-    <button class="primary" id="import-apply">Import</button>
-    <button id="import-cancel">Cancel</button>
-  </div>
-</div>
-<input type="file" id="import-file" accept="application/json,.json" style="display:none">
 
 <div id="toast"></div>
 

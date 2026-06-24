@@ -349,10 +349,10 @@ def cmd_import_comments(args) -> int:
     """Import comments from an exported JSON file into the running session.
 
     Reads the JSON produced by the share page's "Export comments" button and
-    POSTs each comment to the session via /api/comment. Deduplicates against
-    existing session comments by (author, quote, body, source, round). Comments
-    whose quoted text no longer exists in the current document are flagged
-    stale.
+    POSTs it to the session's ``/api/import`` endpoint, which deduplicates
+    against existing session comments by (author, quote, body, source, round)
+    and flags comments whose quoted text no longer exists in the current
+    document as stale.
     """
     path = Path(args.file).resolve()
     port = _find_running(path)
@@ -378,7 +378,7 @@ def cmd_import_comments(args) -> int:
         )
         return 1
 
-    # Accept either {"comments": [...]} or a bare [...].
+    # Normalize to {"comments": [...]} so the server has one shape to parse.
     if isinstance(data, list):
         comments = data
     elif isinstance(data, dict):
@@ -392,70 +392,16 @@ def cmd_import_comments(args) -> int:
         )
         return 1
 
-    # Fetch current session state for dedup and stale detection.
-    _, session_data = _request(port, "GET", "/api/state")
-    existing = session_data.get("comments", [])
-    current_text = session_data.get("current_text", "")
-
-    existing_keys = {
-        (
-            c.get("author", "You"),
-            c.get("quote", ""),
-            c.get("body", ""),
-            c.get("source", "doc"),
-            int(c.get("round", 0) or 0),
-        )
-        for c in existing
-    }
-
-    imported, skipped, stale = [], [], []
-    for c in comments:
-        author = c.get("author", "Anonymous")
-        quote = c.get("quote", "")
-        body = c.get("body", "")
-        source = c.get("source", "doc")
-        round_ = int(c.get("round", 0) or 0)
-
-        key = (author, quote, body, source, round_)
-        if key in existing_keys:
-            skipped.append(c)
-            continue
-        existing_keys.add(key)
-
-        # Check if the quote text still exists in the document.
-        is_stale = bool(quote) and quote not in current_text
-
-        _, resp = _request(
-            port,
-            "POST",
-            "/api/comment",
-            {
-                "body": body,
-                "quote": quote,
-                "context_before": c.get("context_before", ""),
-                "context_after": c.get("context_after", ""),
-                "source": source,
-                "round": round_,
-                "author": author,
-                "stale": is_stale,
-            },
-        )
-        if resp.get("id") is not None:
-            imported.append(resp)
-            if is_stale:
-                stale.append(resp)
-        else:
-            skipped.append(c)
-
+    _, resp = _request(port, "POST", "/api/import", {"comments": comments})
     result = {
-        "ok": True,
-        "imported": len(imported),
-        "skipped_duplicates": len(skipped),
-        "stale": len(stale),
+        "ok": bool(resp.get("ok", False)),
+        "imported": resp.get("imported", 0),
+        "skipped_duplicates": resp.get("skipped_duplicates", 0),
+        "stale": resp.get("stale", 0),
         "url": f"http://127.0.0.1:{port}",
     }
-    if stale:
-        result["stale_ids"] = [c["id"] for c in stale]
+    if resp.get("stale_ids"):
+        result["stale_ids"] = resp["stale_ids"]
     print(json.dumps(result, indent=2))
     return 0
 

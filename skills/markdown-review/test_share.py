@@ -243,60 +243,81 @@ def test_export_no_automatic_download(tmp_path):
         browser.close()
 
 
-def test_import_from_paste_box_merges_comments(tmp_path):
-    """The Import ▾ dropdown opens a paste box whose JSON is merged in,
-    deduped against existing comments."""
-    html_path = _write_share_html(tmp_path)
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page()
-        page.goto(html_path.as_uri())
-        page.wait_for_selector("#md-render")
-        _set_author(page, "Eve")
-        page.fill("#general-input", "original note")
-        page.click("#general-add")
-        page.wait_for_selector(".comment-card")
+def test_live_import_from_paste_box_merges_comments(tmp_path):
+    """The live viewer's Import ▾ dropdown opens a paste box whose JSON is
+    POSTed to /api/import and merged into the session, deduped against
+    existing comments."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    doc = tmp_path / "live.md"
+    doc.write_text("# Plan\n\nShip feature X.\n")
+    env = _env(state_dir)
 
-        # Open the Import dropdown and pick the paste option.
-        page.click("#import-btn")
-        page.wait_for_selector("#import-menu.open")
-        page.click("#import-menu-text")
-        page.wait_for_selector("#import-box.open")
+    info = _spawn_daemon(state_dir, doc)
+    url = f"http://127.0.0.1:{info['port']}"
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            page = browser.new_page()
+            page.goto(url)
+            page.wait_for_selector("#md-render")
+            # Add one comment directly so dedup has something to hit.
+            page.fill("#general-input", "original note")
+            page.click("#general-add")
+            page.wait_for_selector(".comment-card")
 
-        payload = json.dumps(
-            {
-                "doc_name": "share-doc.md",
-                "comments": [
-                    {
-                        "body": "from friend",
-                        "quote": "",
-                        "context_before": "",
-                        "context_after": "",
-                        "source": "doc",
-                        "round": 0,
-                        "author": "Frank",
-                    },
-                    # Duplicate of Eve's existing general note → skipped.
-                    {
-                        "body": "original note",
-                        "quote": "",
-                        "context_before": "",
-                        "context_after": "",
-                        "source": "doc",
-                        "round": 0,
-                        "author": "Eve",
-                    },
-                ],
-            }
+            # Open the Import dropdown and pick the paste option.
+            page.click("#import-btn")
+            page.wait_for_selector("#import-menu.open")
+            page.click("#import-menu-text")
+            page.wait_for_selector("#import-box.open")
+
+            payload = json.dumps(
+                {
+                    "comments": [
+                        {
+                            "body": "from friend",
+                            "quote": "",
+                            "context_before": "",
+                            "context_after": "",
+                            "source": "doc",
+                            "round": 0,
+                            "author": "Frank",
+                        },
+                        # Duplicate of the existing general note → skipped.
+                        {
+                            "body": "original note",
+                            "quote": "",
+                            "context_before": "",
+                            "context_after": "",
+                            "source": "doc",
+                            "round": 0,
+                            "author": "You",
+                        },
+                    ],
+                }
+            )
+            page.fill("#import-json", payload)
+            page.click("#import-apply")
+            # One existing + one imported = two cards.
+            page.wait_for_function(
+                "() => document.querySelectorAll('.comment-card').length === 2"
+            )
+            # Import box auto-closes on success.
+            page.wait_for_selector("#import-box.open", state="hidden")
+            browser.close()
+
+        # The imported comment is persisted server-side.
+        status = subprocess.run(
+            [sys.executable, str(MDEDIT), "status", str(doc)],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=15,
         )
-        page.fill("#import-json", payload)
-        page.click("#import-apply")
-        page.wait_for_function(
-            "() => document.querySelectorAll('.comment-card').length === 2"
-        )
-        # Import box auto-closes on success.
-        page.wait_for_selector("#import-box.open", state="hidden")
-        browser.close()
+        assert json.loads(status.stdout)["comment_count"] == 2
+    finally:
+        _stop(info["pid"])
 
 
 # ---------------------------------------------------------------------------
