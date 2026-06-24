@@ -45,6 +45,37 @@ def _asset_url(filename: str) -> str:
     return VENDOR_ASSETS[filename]
 
 
+# Characters that must be neutralised when a JSON value is interpolated into a
+# <script> block. The HTML parser scans the raw text of a script element for
+# ``</script>`` (and the ``<!--`` / ``-->`` delimiter dance) regardless of JS
+# string context, so a document name like ``</script>`` would terminate the
+# element early and let the remainder be parsed as markup. Escaping ``<`` and
+# ``>`` (and, for defence in depth, ``&`` plus the two JSON-legal JS line
+# terminators) prevents any of those sequences from ever appearing literally;
+# the JS engine reads ``\u003c`` back as ``<``, so semantics are unchanged.
+_SCRIPT_JSON_UNSAFE = {
+    "<": r"\u003c",
+    ">": r"\u003e",
+    "&": r"\u0026",
+    "\u2028": r"\u2028",
+    "\u2029": r"\u2029",
+}
+
+
+def _script_json(obj) -> str:
+    """JSON-encode ``obj`` for safe interpolation inside an HTML ``<script>``.
+
+    ``json.dumps`` alone is NOT safe in this position (see
+    ``_SCRIPT_JSON_UNSAFE``). This applies the escapes on top of a plain
+    ``json.dumps``; the result is still a valid JSON value and, in a JS string
+    context, decodes to exactly the original.
+    """
+    encoded = json.dumps(obj)
+    for char, esc in _SCRIPT_JSON_UNSAFE.items():
+        encoded = encoded.replace(char, esc)
+    return encoded
+
+
 VALSTRO_CSS = r"""
 :root {
   --bg-1000:#05080A; --bg-900:#0C1217; --bg-800:#151C22; --bg-700:#21282E;
@@ -313,7 +344,7 @@ def build_html(name: str) -> str:
 <div id="toast"></div>
 
 <script>
-const DOC_NAME = {json.dumps(name)};
+const DOC_NAME = {_script_json(name)};
 
 marked.setOptions({{ gfm:true, breaks:false }});
 const renderer = new marked.Renderer();
