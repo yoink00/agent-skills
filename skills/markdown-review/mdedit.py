@@ -68,6 +68,7 @@ import http.server
 import json
 import os
 import re
+import signal
 import socket
 import socketserver
 import sys
@@ -309,6 +310,15 @@ class Session:
             self._new_round_pending = True
             self.last_activity = time.time()
             self._cond.notify_all()
+
+    def touch(self) -> None:
+        """Bump `last_activity` without any state change.
+
+        Called by poll-style GET handlers (/api/poll, /api/comments) so that an
+        open browser tab or an in-flight CLI `review` keeps the daemon alive.
+        """
+        with self._cond:
+            self.last_activity = time.time()
 
     # -- waiters ------------------------------------------------------------
 
@@ -1031,6 +1041,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/state":
             self._json(self.session.snapshot())
         elif path == "/api/comments":
+            self.session.touch()
             self._json(self.session.comments_payload())
         elif path == "/api/poll":
             q = parse_qs(p.query)
@@ -1038,6 +1049,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 since = int(q.get("v", ["0"])[0])
             except (ValueError, IndexError):
                 since = 0
+            self.session.touch()
             ver = self.session.wait_for_version(since, timeout=25.0)
             self._json({"version": ver, "submitted": self.session.submitted})
         elif path == "/api/ping":
@@ -1189,6 +1201,27 @@ def _request(port: int, method: str, path: str, body: dict | None = None,
 
 
 # ---------------------------------------------------------------------------
+# Idle shutdown
+# ---------------------------------------------------------------------------
+
+def _idle_reaper(session: Session, server: Server, timeout: float):
+    """Background thread that shuts down the server after `timeout` seconds
+    of inactivity (no edits, no comments, no polling).
+
+    ``timeout <= 0`` disables the reaper (called from the outside — this
+    function is not started in that case).
+    """
+    check_interval = min(60.0, max(0.5, timeout / 4.0))
+    while True:
+        with session._cond:
+            session._cond.wait(timeout=check_interval)
+            idle = time.time() - session.last_activity
+        if idle >= timeout:
+            threading.Thread(target=server.shutdown, daemon=True).start()
+            return
+
+
+# ---------------------------------------------------------------------------
 # Daemon entry point (run in a forked child)
 # ---------------------------------------------------------------------------
 
@@ -1210,6 +1243,18 @@ def _run_daemon(path: Path, port: int, open_browser: bool):
 
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+
+    # Idle auto-shutdown.
+    idle_timeout = float(os.environ.get("MDEDIT_IDLE_TIMEOUT", "300"))
+    if idle_timeout > 0:
+        threading.Thread(target=_idle_reaper, args=(session, httpd, idle_timeout),
+                         daemon=True).start()
+
+    # Clean shutdown on SIGTERM / SIGHUP so `kill <pid>` removes the state file
+    # via the `finally` block below.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: threading.Thread(
+            target=httpd.shutdown, daemon=True).start())
 
     try:
         httpd.serve_forever()
@@ -1335,14 +1380,24 @@ def cmd_review(args) -> int:
     # Block until the user clicks Send (or timeout). We poll the server.
     deadline = None if args.timeout <= 0 else time.monotonic() + args.timeout
     while True:
-        status, data = _request(port, "GET", "/api/comments", timeout=5.0)
+        try:
+            status, data = _request(port, "GET", "/api/comments", timeout=5.0)
+        except OSError:
+            print(json.dumps({"ok": False, "error": "session ended"}),
+                  file=sys.stderr)
+            return 1
         if data.get("submitted"):
             break
         if deadline is not None and time.monotonic() > deadline:
             break
         time.sleep(0.6)
 
-    _, payload = _request(port, "GET", "/api/comments", timeout=5.0)
+    try:
+        _, payload = _request(port, "GET", "/api/comments", timeout=5.0)
+    except OSError:
+        print(json.dumps({"ok": False, "error": "session ended"}),
+              file=sys.stderr)
+        return 1
     result = {
         "path": str(path),
         "submitted": payload.get("submitted", False),
@@ -1475,6 +1530,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="LLM-driven markdown editing & review tool.")
     p.add_argument("--no-browser", action="store_true",
                    help="Do not auto-open a browser tab.")
+    p.add_argument("--idle-timeout", type=float, default=None,
+                   help="Idle shutdown in seconds (default: 300). 0 disables. "
+                        "Overrides MDEDIT_IDLE_TIMEOUT.")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("open", help="Open or focus the viewer for a document.")
@@ -1541,6 +1599,9 @@ def main() -> int:
     # Sub-command level --no-browser fallback: top-level flag may sit before subcmd.
     if not hasattr(args, "no_browser"):
         args.no_browser = False
+    # Propagate --idle-timeout to the forked daemon child via env.
+    if getattr(args, "idle_timeout", None) is not None:
+        os.environ["MDEDIT_IDLE_TIMEOUT"] = str(args.idle_timeout)
     return args.func(args)
 
 

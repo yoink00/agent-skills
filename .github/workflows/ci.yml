@@ -1,0 +1,59 @@
+name: CI
+
+# Runs on every pull request (the primary ask) and on pushes to main so the
+# baseline stays green between PRs.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & type-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Ruff (linter) — config in pyproject.toml ([tool.ruff]).
+      - name: Ruff
+        run: uvx ruff check .
+
+      # Mypy (static type-check) — config in pyproject.toml ([tool.mypy]); it
+      # pins the files to check (skills/markdown-review/mdedit.py).
+      - name: Mypy
+        run: uvx mypy
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # mdedit.py declares a 3.10+ minimum; test the floor and current releases.
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      # `uv run --with pytest` builds an ephemeral env with pytest for the given
+      # Python. The tests spawn the real mdedit.py daemon (which os.fork()s),
+      # so they are Unix-only — hence ubuntu-latest.
+      - name: Run tests
+        run: >-
+          uv run --python ${{ matrix.python-version }} --with pytest
+          python -m pytest skills/markdown-review/test_idle_shutdown.py -v
