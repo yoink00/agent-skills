@@ -4,8 +4,12 @@ An agent skill for **interactive, human-in-the-loop markdown editing**. The
 agent edits a document; you watch the changes land live in a browser, leave
 inline comments, and click **Send to LLM** to return them — no copy-paste.
 
-It is built around `mdedit.py`, a single-file tool with **no third-party
-dependencies** (Python 3.10+ standard library only).
+It is built around `mdedit.py`, a runnable entry point with **no third-party
+dependencies** (Python 3.10+ standard library only). The implementation is
+split into focused modules alongside it: `model.py` (session state),
+`frontend.py` (the browser viewer), `server.py` (the HTTP daemon) and
+`cliutil.py` (CLI text helpers). You still drive everything through
+`mdedit.py`; the split just makes the pieces independently testable.
 
 ## What it does
 
