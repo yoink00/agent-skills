@@ -18,8 +18,8 @@
 # ──────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILL_DIR="$HERE/../skills/markdown-review"
+# This script lives inside the skill directory, so mdedit.py is right here.
+SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MDEDIT="${MDEDIT:-$SKILL_DIR/mdedit.py}"
 DOC="${1:-${DOC:-/tmp/mdedit-highlight-demo.md}}"
