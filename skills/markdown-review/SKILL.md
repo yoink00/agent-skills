@@ -288,6 +288,79 @@ people in parallel.
    python3 "$MDEDIT" stop path/to/doc.md
    ```
 
+## Resuming a session
+
+Sessions are **automatically persisted** to disk as you work — every edit,
+comment, and review round is saved. If the daemon dies (idle timeout, crash,
+restart, or `stop`), you can **resume** the session with all diff history,
+comments, and round bookkeeping intact.
+
+### Discovering resumable sessions
+
+To see which documents have saved sessions:
+
+```bash
+python3 "$MDEDIT" resume --list
+```
+
+This prints a JSON array of resumable sessions with their document path, round,
+comment count, edit count, and whether the file still exists on disk.
+
+### Resuming
+
+```bash
+python3 "$MDEDIT" resume path/to/doc.md
+```
+
+This spawns a new daemon with the saved state restored, opens the browser, and
+prints a summary JSON:
+
+```json
+{
+  "ok": true,
+  "url": "http://127.0.0.1:7575",
+  "path": "/abs/doc.md",
+  "restored": true,
+  "round": 2,
+  "comments": 3,
+  "edits": 5
+}
+```
+
+If a daemon is already running for the document, `resume` reuses it (the saved
+state is not re-applied).
+
+### External-edit detection
+
+If the document was modified outside mdedit since the session was saved (e.g.
+someone edited it directly), `resume` includes a `warning` field in the output:
+
+```json
+{
+  "ok": true,
+  "restored": true,
+  "warning": "document was modified externally since the session was saved",
+  "disk_text_length": 1250,
+  "saved_text_length": 1234
+}
+```
+
+When you see this warning, inspect the document to understand what changed. The
+saved diff history and comments may reference text that no longer matches. You
+can either proceed with the restored session (if the changes are minor) or start
+fresh with `open`.
+
+### Stopping without saving / purging
+
+`stop` by default keeps the saved session so you can resume later. To stop and
+**permanently delete** the saved session (diffs, comments, rounds):
+
+```bash
+python3 "$MDEDIT" stop --purge path/to/doc.md
+```
+
+The document file itself is never deleted — only the session metadata.
+
 ## Command reference
 
 | Command             | Purpose                                                      | Blocking? |
@@ -300,7 +373,9 @@ people in parallel.
 | `share`             | Generate standalone share HTML for offline review (stdout).  | No        |
 | `import-comments`   | Import comments from exported JSON into the running session. | No        |
 | `status`            | Print session state (version, edit/comment counts) as JSON.  | No        |
-| `stop`              | Shut the session daemon down.                                | No        |
+| `resume`            | Resume a saved session (restore diffs, comments, rounds).   | No        |
+| `stop`              | Shut the session daemon down (`--purge` also deletes the    | No        |
+|                     | saved session so it cannot be resumed).                     |          |
 
 Useful flags:
 
@@ -309,6 +384,8 @@ Useful flags:
 - `review --timeout N`: wait at most N seconds (0 = wait forever, the default).
 - `review --json`: suppress the human-readable stderr notice; only emit JSON.
 - `import-comments --from PATH`: path to comment JSON file, or `-` for stdin.
+- `resume --list`: list all resumable sessions and exit.
+- `stop --purge`: also delete the saved session so it cannot be resumed.
 
 ## Tips
 
@@ -327,4 +404,5 @@ Useful flags:
   made in a given `round`. Read them as "feedback on your last edit" rather than
   "feedback on the document as written", and reply with a follow-up edit.
 - The script writes edits to the file on disk, so the document is always
-  persisted — there is nothing extra to save.
+  persisted — there is nothing extra to save. Session state (diffs, comments,
+  rounds) is also auto-saved; use `resume` to recover after the daemon dies.

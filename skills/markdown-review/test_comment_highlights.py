@@ -40,7 +40,10 @@ def _env(state_dir: Path) -> dict[str, str]:
 
 
 def _state_file(state_dir: Path) -> dict | None:
-    files = list(state_dir.glob("*.json"))
+    files = list(state_dir.glob("*/daemon.json"))
+    if not files:
+        # Fall back to old-style flat files.
+        files = list(state_dir.glob("*.json"))
     if not files:
         return None
     return json.loads(files[0].read_text())

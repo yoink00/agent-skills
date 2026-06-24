@@ -38,7 +38,9 @@ Sub-commands
     mdedit.py resolve     <file.md> --id N | --all       # clear addressed comments
     mdedit.py clear-diffs <file.md> [--all]              # prune the Changes-view history
     mdedit.py status      <file.md>                      # print session state JSON
-    mdedit.py stop        <file.md>                      # shut the session down
+    mdedit.py resume      <file.md>                      # resume a saved session
+    mdedit.py resume      --list                         # list resumable sessions
+    mdedit.py stop        <file.md> [--purge]            # shut down (+ delete saved)
 
 Rounds
 ------
@@ -79,7 +81,14 @@ from frontend import VENDOR_ASSETS, VENDOR_DIR, build_share_html
 
 # The HTTP daemon and session registry live in server.py; the CLI commands
 # below are thin clients that talk to it over localhost.
-from server import _ensure_daemon, _find_running, _request
+from server import (
+    STATE_DIR,
+    _ensure_daemon,
+    _find_running,
+    _load_session,
+    _purge_session,
+    _request,
+)
 
 
 def cmd_open(args) -> int:
@@ -90,6 +99,91 @@ def cmd_open(args) -> int:
     print(
         json.dumps({"ok": True, "url": f"http://127.0.0.1:{port}", "path": str(path)})
     )
+    return 0
+
+
+def cmd_resume(args) -> int:
+    """Resume a previously saved session, restoring diffs, comments, and rounds."""
+
+    # --- list mode ---
+    if getattr(args, "list", False) or not getattr(args, "file", None):
+        sessions = []
+        if STATE_DIR.is_dir():
+            for sf in sorted(STATE_DIR.glob("*/session.json")):
+                try:
+                    data = json.loads(sf.read_text(encoding="utf-8"))
+                except (ValueError, OSError):
+                    continue
+                doc_path = data.get("path", "")
+                exists = Path(doc_path).exists() if doc_path else False
+                sessions.append(
+                    {
+                        "path": doc_path,
+                        "name": data.get("name", ""),
+                        "round": data.get("current_round", 1),
+                        "comments": len(data.get("comments", [])),
+                        "edits": len(data.get("edits", [])),
+                        "version": data.get("version", 0),
+                        "exists_on_disk": exists,
+                    }
+                )
+        print(json.dumps({"sessions": sessions}, indent=2))
+        return 0
+
+    # --- single-file resume ---
+    path = Path(args.file).resolve()
+    if not path.exists():
+        print(
+            json.dumps({"ok": False, "error": f"file not found: {path}"}),
+            file=sys.stderr,
+        )
+        return 1
+
+    saved = _load_session(path)
+    if saved is None:
+        print(
+            json.dumps(
+                {"ok": False, "error": "no saved session found for this document"}
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check for external edits.
+    warning = None
+    disk_text = path.read_text(encoding="utf-8")
+    saved_text = saved.get("current_text", "")
+    if disk_text != saved_text:
+        warning = "document was modified externally since the session was saved"
+
+    # If a daemon is already running for this doc, don't spawn a new one.
+    port = _find_running(path)
+    if port:
+        result = {
+            "ok": True,
+            "url": f"http://127.0.0.1:{port}",
+            "path": str(path),
+            "restored": False,
+            "note": "session already running",
+        }
+    else:
+        port = _ensure_daemon(path, open_browser=not args.no_browser, restore=True)
+        result = {
+            "ok": True,
+            "url": f"http://127.0.0.1:{port}",
+            "path": str(path),
+            "restored": True,
+            "round": saved.get("current_round", 1),
+            "comments": len(saved.get("comments", [])),
+            "edits": len(saved.get("edits", [])),
+        }
+
+    if warning:
+        result["warning"] = warning
+        result["disk_text_length"] = len(disk_text)
+        result["saved_text_length"] = len(saved_text)
+
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -293,14 +387,18 @@ def cmd_status(args) -> int:
 def cmd_stop(args) -> int:
     path = Path(args.file).resolve()
     port = _find_running(path)
-    if not port:
-        print(json.dumps({"ok": True, "note": "no running session"}))
-        return 0
-    try:
-        _request(port, "POST", "/api/stop", {})
-    except OSError:
-        pass
-    print(json.dumps({"ok": True}))
+    if port:
+        try:
+            _request(port, "POST", "/api/stop", {})
+        except OSError:
+            pass
+    result: dict = {"ok": True}
+    if getattr(args, "purge", False):
+        removed = _purge_session(path)
+        result["purged"] = removed
+    elif not port:
+        result["note"] = "no running session"
+    print(json.dumps(result))
     return 0
 
 
@@ -449,6 +547,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("file")
     sp.set_defaults(func=cmd_open)
 
+    sp = sub.add_parser(
+        "resume",
+        help="Resume a saved session (restore diffs, comments, and rounds).",
+    )
+    sp.add_argument(
+        "file",
+        nargs="?",
+        help="Document to resume. Omit (or use --list) to list resumable sessions.",
+    )
+    sp.add_argument(
+        "--list",
+        action="store_true",
+        help="List all resumable sessions and exit.",
+    )
+    sp.set_defaults(func=cmd_resume)
+
     sp = sub.add_parser("edit", help="Apply one or more search/replace edits.")
     sp.add_argument("file")
     sp.add_argument(
@@ -519,6 +633,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("stop", help="Shut the session daemon down.")
     sp.add_argument("file")
+    sp.add_argument(
+        "--purge",
+        action="store_true",
+        help="Also delete the saved session (so it cannot be resumed).",
+    )
     sp.set_defaults(func=cmd_stop)
 
     sp = sub.add_parser(
