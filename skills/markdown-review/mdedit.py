@@ -75,7 +75,7 @@ from cliutil import unescape_cli as _unescape_cli
 
 # cmd_vendor_manifest reports the vendored-asset manifest (the single source
 # of truth lives in frontend.py and is also read by update-vendor.sh).
-from frontend import VENDOR_ASSETS, VENDOR_DIR
+from frontend import VENDOR_ASSETS, VENDOR_DIR, build_share_html
 
 # The HTTP daemon and session registry live in server.py; the CLI commands
 # below are thin clients that talk to it over localhost.
@@ -304,6 +304,162 @@ def cmd_stop(args) -> int:
     return 0
 
 
+def cmd_share(args) -> int:
+    """Generate a standalone share HTML for offline review.
+
+    If a daemon is running, fetches the live snapshot (including diff history).
+    Otherwise reads the file from disk directly (no diff history).
+    Writes the share HTML to stdout.
+    """
+    path = Path(args.file).resolve()
+    if not path.exists():
+        print(
+            json.dumps({"ok": False, "error": f"file not found: {path}"}),
+            file=sys.stderr,
+        )
+        return 1
+
+    port = _find_running(path)
+    if port:
+        # Fetch the live snapshot from the running session.
+        _, data = _request(port, "GET", "/api/state")
+        snapshot = data
+    else:
+        # No daemon — read the file directly.
+        text = path.read_text(encoding="utf-8")
+        snapshot = {
+            "path": str(path),
+            "name": path.name,
+            "version": 0,
+            "submitted": False,
+            "current_round": 1,
+            "original_text": text,
+            "current_text": text,
+            "edits": [],
+            "comments": [],
+        }
+
+    html = build_share_html(snapshot)
+    sys.stdout.write(html)
+    sys.stdout.flush()
+    return 0
+
+
+def cmd_import_comments(args) -> int:
+    """Import comments from an exported JSON file into the running session.
+
+    Reads the JSON produced by the share page's "Export comments" button and
+    POSTs each comment to the session via /api/comment. Deduplicates against
+    existing session comments by (author, quote, body, source, round). Comments
+    whose quoted text no longer exists in the current document are flagged
+    stale.
+    """
+    path = Path(args.file).resolve()
+    port = _find_running(path)
+    if not port:
+        print(
+            json.dumps(
+                {"ok": False, "error": "no running session — open the document first"}
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    # Read the comment JSON.
+    raw = (
+        sys.stdin.read() if args.from_path == "-" else Path(args.from_path).read_text()
+    )
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        print(
+            json.dumps({"ok": False, "error": f"invalid JSON: {exc}"}),
+            file=sys.stderr,
+        )
+        return 1
+
+    # Accept either {"comments": [...]} or a bare [...].
+    if isinstance(data, list):
+        comments = data
+    elif isinstance(data, dict):
+        comments = data.get("comments", [])
+    else:
+        print(
+            json.dumps(
+                {"ok": False, "error": "expected a JSON array or {comments: [...]}"}
+            ),
+            file=sys.stderr,
+        )
+        return 1
+
+    # Fetch current session state for dedup and stale detection.
+    _, session_data = _request(port, "GET", "/api/state")
+    existing = session_data.get("comments", [])
+    current_text = session_data.get("current_text", "")
+
+    existing_keys = {
+        (
+            c.get("author", "You"),
+            c.get("quote", ""),
+            c.get("body", ""),
+            c.get("source", "doc"),
+            int(c.get("round", 0) or 0),
+        )
+        for c in existing
+    }
+
+    imported, skipped, stale = [], [], []
+    for c in comments:
+        author = c.get("author", "Anonymous")
+        quote = c.get("quote", "")
+        body = c.get("body", "")
+        source = c.get("source", "doc")
+        round_ = int(c.get("round", 0) or 0)
+
+        key = (author, quote, body, source, round_)
+        if key in existing_keys:
+            skipped.append(c)
+            continue
+        existing_keys.add(key)
+
+        # Check if the quote text still exists in the document.
+        is_stale = bool(quote) and quote not in current_text
+
+        _, resp = _request(
+            port,
+            "POST",
+            "/api/comment",
+            {
+                "body": body,
+                "quote": quote,
+                "context_before": c.get("context_before", ""),
+                "context_after": c.get("context_after", ""),
+                "source": source,
+                "round": round_,
+                "author": author,
+                "stale": is_stale,
+            },
+        )
+        if resp.get("id") is not None:
+            imported.append(resp)
+            if is_stale:
+                stale.append(resp)
+        else:
+            skipped.append(c)
+
+    result = {
+        "ok": True,
+        "imported": len(imported),
+        "skipped_duplicates": len(skipped),
+        "stale": len(stale),
+        "url": f"http://127.0.0.1:{port}",
+    }
+    if stale:
+        result["stale_ids"] = [c["id"] for c in stale]
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def cmd_vendor_manifest(args) -> int:
     """Print the front-end asset manifest as JSON.
 
@@ -418,6 +574,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("stop", help="Shut the session daemon down.")
     sp.add_argument("file")
     sp.set_defaults(func=cmd_stop)
+
+    sp = sub.add_parser(
+        "share",
+        help="Generate standalone share HTML for offline review (writes to stdout).",
+    )
+    sp.add_argument("file")
+    sp.set_defaults(func=cmd_share)
+
+    sp = sub.add_parser(
+        "import-comments",
+        help="Import comments from an exported JSON file into the running session.",
+    )
+    sp.add_argument("file")
+    sp.add_argument(
+        "--from",
+        dest="from_path",
+        metavar="PATH",
+        required=True,
+        help="Path to comment JSON file, or '-' for stdin.",
+    )
+    sp.set_defaults(func=cmd_import_comments)
 
     sp = sub.add_parser(
         "vendor-manifest",

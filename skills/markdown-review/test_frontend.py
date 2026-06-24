@@ -177,3 +177,134 @@ class TestBuildHtml:
         base_a = a.replace("a.md", "X")
         base_b = b.replace("b.md", "X")
         assert base_a == base_b
+
+
+class TestBuildShareHtml:
+    """Tests for the standalone share page (build_share_html)."""
+
+    def _snapshot(self, name="doc.md", text="# Hello\n", edits=None, comments=None):
+        return {
+            "name": name,
+            "version": 1,
+            "submitted": False,
+            "current_round": 1,
+            "original_text": text,
+            "current_text": text,
+            "edits": edits or [],
+            "comments": comments or [],
+        }
+
+    def test_is_a_complete_html_document(self):
+        html = frontend.build_share_html(self._snapshot())
+        assert html.startswith("<!DOCTYPE html>")
+        assert html.rstrip().endswith("</html>")
+
+    def test_injects_document_name_into_title(self):
+        html = frontend.build_share_html(self._snapshot("plan.md"))
+        assert "plan.md — review (shared)</title>" in html
+
+    def test_embeds_snapshot_json(self):
+        snap = self._snapshot(text="# Hello world\n")
+        html = frontend.build_share_html(snap)
+        assert "INITIAL_STATE" in html
+        assert "Hello world" in html
+
+    def test_has_export_button_not_send(self):
+        html = frontend.build_share_html(self._snapshot())
+        assert "Export comments" in html
+        assert "send-btn" in html  # same ID, different label
+
+    def test_has_author_prompt(self):
+        html = frontend.build_share_html(self._snapshot())
+        assert "author-prompt" in html
+        assert "author-input" in html
+
+    def test_has_export_box(self):
+        html = frontend.build_share_html(self._snapshot())
+        assert "export-box" in html
+        assert "export-json" in html
+
+    def test_has_share_banner(self):
+        html = frontend.build_share_html(self._snapshot())
+        assert "share-banner" in html
+
+    def test_no_server_api_calls(self):
+        """The share page must not make any fetch('/api/...') calls."""
+        html = frontend.build_share_html(self._snapshot())
+        assert "/api/state" not in html
+        assert "/api/poll" not in html
+        assert "/api/comment" not in html
+        assert "/api/submit" not in html
+        assert "/api/share" not in html
+
+    def test_has_core_viewer_js(self):
+        """Both pages share the same core rendering JS."""
+        html = frontend.build_share_html(self._snapshot())
+        assert "renderComments" in html
+        assert "renderDiff" in html
+        assert "applyCommentHighlights" in html
+
+    def test_has_local_add_comment(self):
+        """The share page defines its own in-memory addComment."""
+        html = frontend.build_share_html(self._snapshot())
+        assert "addComment" in html
+        assert "state.comments.push" in html
+
+    def test_contains_css(self):
+        html = frontend.build_share_html(self._snapshot())
+        assert frontend.VALSTRO_CSS.strip()[:60] in html
+
+    def test_escapes_html_in_displayed_name(self):
+        name = '<img src=x>"evil".md'
+        html = frontend.build_share_html(self._snapshot(name))
+        assert "<title>&lt;img src=x>&quot;evil&quot;.md" in html
+
+    def test_same_ui_anchors_as_live_page(self):
+        """Share page has the same element IDs the core JS hooks onto."""
+        html = frontend.build_share_html(self._snapshot())
+        for anchor in (
+            "#md-render",
+            "#diff-render",
+            "#comments-list",
+            "#send-btn",
+            "#sel-popover",
+            "view-rendered",
+            "view-diff",
+        ):
+            assert anchor in html, anchor
+
+    def test_inlines_vendored_assets_when_available(self, tmp_path, monkeypatch):
+        """When vendor files exist they are inlined as <script>/<style> blocks."""
+        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
+        (tmp_path / "marked.min.js").write_text("// marked inlined")
+        (tmp_path / "highlight.min.js").write_text("// hljs inlined")
+        (tmp_path / "highlight-onedark.min.css").write_text("/* css inlined */")
+        html = frontend.build_share_html(self._snapshot())
+        assert "// marked inlined" in html
+        assert "// hljs inlined" in html
+        assert "/* css inlined */" in html
+
+    def test_uses_cdn_urls_when_vendor_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
+        html = frontend.build_share_html(self._snapshot())
+        assert frontend.VENDOR_ASSETS["marked.min.js"] in html
+
+
+class TestInlineOrUrl:
+    def test_inlines_script_when_vendored(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
+        (tmp_path / "test.js").write_text("var x=1;")
+        result = frontend._inline_or_url("test.js", "script")
+        assert "<script>" in result and "var x=1;" in result
+
+    def test_inlines_style_when_vendored(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
+        (tmp_path / "test.css").write_text("body{color:red}")
+        result = frontend._inline_or_url("test.css", "style")
+        assert "<style>" in result and "color:red" in result
+
+    def test_cdn_url_when_not_vendored(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
+        result = frontend._inline_or_url("marked.min.js", "script")
+        assert frontend.VENDOR_ASSETS["marked.min.js"] in result
+        assert "<script src=" in result

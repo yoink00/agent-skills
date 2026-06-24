@@ -130,6 +130,8 @@ use the normal edit tools for those.
          "context_before": "## Goals\n\n- ",
          "context_after": "\n- Improve performance",
          "source": "doc",
+         "author": "You",
+         "stale": false,
          "round": 0
        },
        {
@@ -150,6 +152,11 @@ use the normal edit tools for those.
      anchored to document text) or `"diff"` (the Changes view — anchored to a
      diff line from the given `round`). For a `"diff"` comment, `round` is the
      round whose change the user is reacting to.
+   - `author` identifies who wrote the comment (default `"You"` for the live
+     viewer; the colleague's name for imported comments).
+   - `stale` is `true` if the comment's `quote` text no longer exists in the
+     current document (the text was edited after the comment was made). Treat
+     the context as potentially shifted.
    - An empty `comments` array with `submitted: true` means the user approved
      with no changes.
    - **Resolve each comment once you have addressed it** so it does not come
@@ -187,6 +194,71 @@ this, edits are grouped into **rounds**:
   `clear-diffs` (keeps the current round) or `clear-diffs --all` (wipes all).
   The user can also click **Clear old rounds** in the browser.
 
+## Sharing for offline review
+
+The viewer has a **Share** button (top bar) that downloads a standalone HTML
+file — a self-contained copy of the document with the full commenting UI but
+**no server dependency**. The colleague opens it in any browser, adds comments,
+and clicks **Export comments** to download a JSON file. You then import those
+comments back into the live session.
+
+This is useful when a colleague can't connect to your local server (different
+machine, offline, etc.) or when you want to collect feedback from multiple
+people in parallel.
+
+### Sharing out
+
+1. The user clicks **Share** in the live viewer (or you run the CLI command):
+
+   ```bash
+   python3 "$MDEDIT" share path/to/doc.md > doc.share.html
+   ```
+
+   The CLI `share` command writes standalone HTML to stdout. If a session is
+   running, the snapshot includes diff history; otherwise it reads the file
+   from disk.
+
+2. Send the `.share.html` file to your colleague (email, chat, etc.).
+
+### Collecting comments back
+
+1. Your colleague opens the file in a browser, enters their name, adds
+   comments, and clicks **Export comments**. They send back the downloaded
+   `.comments.json` file.
+
+2. Import the comments into the live session:
+
+   ```bash
+   python3 "$MDEDIT" import-comments path/to/doc.md --from colleague.comments.json
+   ```
+
+   Use `--from -` to read from stdin instead.
+
+3. The output JSON reports how many comments were imported, how many were
+   skipped as duplicates, and how many were flagged stale:
+
+   ```json
+   {
+     "ok": true,
+     "imported": 3,
+     "skipped_duplicates": 1,
+     "stale": 1,
+     "stale_ids": [5],
+     "url": "http://127.0.0.1:7575"
+   }
+   ```
+
+   - **Duplicates** are detected by `(author, quote, body, source, round)` —
+     re-importing the same file is safe, and the same feedback from different
+     people is preserved.
+   - **Stale** comments reference text that has since been edited. They appear
+     with a warning in the viewer and a `"stale": true` flag in the review JSON.
+   - Imported comments appear immediately in the live viewer and flow through
+     the normal `review` → `resolve` cycle.
+
+4. You can import from multiple colleagues — each import adds new comments
+   (deduplicated). Then run `review` as usual to collect all feedback at once.
+
 5. **Finish.** When the user is happy, shut the session down:
 
    ```bash
@@ -195,15 +267,17 @@ this, edits are grouped into **rounds**:
 
 ## Command reference
 
-| Command       | Purpose                                                      | Blocking? |
-| ------------- | ------------------------------------------------------------ | --------- |
-| `open`        | Open/focus the viewer for a document.                        | No        |
-| `edit`        | Apply one or more search/replace edits; pushes a live diff.  | No        |
-| `review`      | Wait for the user to send comments, then print them as JSON. | **Yes**   |
-| `resolve`     | Clear comments you have addressed (`--id N` or `--all`).     | No        |
-| `clear-diffs` | Prune the Changes-view diff history (`--all` wipes all).     | No        |
-| `status`      | Print session state (version, edit/comment counts) as JSON.  | No        |
-| `stop`        | Shut the session daemon down.                                | No        |
+| Command             | Purpose                                                      | Blocking? |
+| ------------------- | ------------------------------------------------------------ | --------- |
+| `open`              | Open/focus the viewer for a document.                        | No        |
+| `edit`              | Apply one or more search/replace edits; pushes a live diff.  | No        |
+| `review`            | Wait for the user to send comments, then print them as JSON. | **Yes**   |
+| `resolve`           | Clear comments you have addressed (`--id N` or `--all`).     | No        |
+| `clear-diffs`       | Prune the Changes-view diff history (`--all` wipes all).     | No        |
+| `share`             | Generate standalone share HTML for offline review (stdout).  | No        |
+| `import-comments`   | Import comments from exported JSON into the running session. | No        |
+| `status`            | Print session state (version, edit/comment counts) as JSON.  | No        |
+| `stop`              | Shut the session daemon down.                                | No        |
 
 Useful flags:
 
@@ -211,6 +285,7 @@ Useful flags:
   contexts.
 - `review --timeout N`: wait at most N seconds (0 = wait forever, the default).
 - `review --json`: suppress the human-readable stderr notice; only emit JSON.
+- `import-comments --from PATH`: path to comment JSON file, or `-` for stdin.
 
 ## Tips
 
