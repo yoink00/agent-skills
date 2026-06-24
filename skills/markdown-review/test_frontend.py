@@ -13,6 +13,7 @@ if SKILL_DIR not in sys.path:
     sys.path.insert(0, SKILL_DIR)
 
 import frontend  # noqa: E402
+from frontend import _script_json  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Asset manifest sanity
@@ -61,6 +62,46 @@ class TestAssetUrl:
 
 
 # ---------------------------------------------------------------------------
+# _script_json — safe JSON for <script> interpolation
+# ---------------------------------------------------------------------------
+
+
+class TestScriptJson:
+    def test_simple_string_is_json(self):
+        assert _script_json("doc.md") == '"doc.md"'
+
+    def test_neutralises_script_close(self):
+        # The literal `</script>` must not survive into the output.
+        assert "</script>" not in _script_json("</script>")
+        assert "</" not in _script_json("</x>")
+
+    def test_angle_brackets_and_amp_escaped(self):
+        out = _script_json("<a>&b")
+        assert "<" not in out and ">" not in out and "&" not in out
+        # and the JS escapes decode back to the originals.
+        assert r"\u003ca\u003e\u0026b" in out
+
+    def test_decodes_to_identical_value(self):
+        # Whatever goes in must come out unchanged once the JS/JSON parses it.
+        import json
+
+        for val in [
+            "doc.md",
+            "</script><script>",
+            'a"b\\c',
+            "line1\nline2",
+            "\u2028paragraph\u2029",
+            '<weird & " name >.md',
+        ]:
+            assert json.loads(_script_json(val)) == val
+
+    def test_handles_non_string(self):
+        import json
+
+        assert json.loads(_script_json({"a": [1, 2]})) == {"a": [1, 2]}
+
+
+# ---------------------------------------------------------------------------
 # build_html
 # ---------------------------------------------------------------------------
 
@@ -77,9 +118,8 @@ class TestBuildHtml:
 
     def test_escapes_html_in_displayed_name(self):
         # The name is rendered into HTML contexts (<title> and the #doc-name
-        # span); markup in the name must be escaped there. (It also appears
-        # verbatim inside the JS `DOC_NAME` JSON literal, which is a JS string
-        # context, not HTML — that's fine for these characters.)
+        # span); markup in the name must be escaped there. (In the JS `DOC_NAME`
+        # literal it is escaped further still — see test_js_doc_name_neutralises_script_breakout.)
         name = '<img src=x>"evil".md'
         html = frontend.build_html(name)
         assert "<title>&lt;img src=x>&quot;evil&quot;.md — mdedit</title>" in html
@@ -94,6 +134,18 @@ class TestBuildHtml:
         html = frontend.build_html('a"b\\c.md')
         # json.dumps keeps the quotes/escapes intact within the JS literal.
         assert '"a\\"b\\\\c.md"' in html
+
+    def test_js_doc_name_neutralises_script_breakout(self):
+        # Regression: a document name containing `</script>` must NOT appear
+        # literally inside the <script> block, or the HTML parser would
+        # terminate the element early and parse the rest as markup (an
+        # injection vector via the file name). The `<` is escaped to \u003c.
+        evil = "</script><script>alert(1)</script>"
+        html = frontend.build_html(evil)
+        assert "</script><script>alert(1)</script>" not in html
+        assert "DOC_NAME" in html  # the literal is still emitted
+        # The escaped form decodes (in JS) back to the original name.
+        assert r"\u003c/script\u003e" in html
 
     def test_embeds_css_and_asset_urls(self):
         html = frontend.build_html("x.md")
