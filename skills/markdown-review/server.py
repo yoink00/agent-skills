@@ -243,16 +243,81 @@ class Server(socketserver.ThreadingTCPServer):
 # ---------------------------------------------------------------------------
 
 
+def _state_key(path: Path) -> str:
+    """Return the filesystem-safe key derived from a document's absolute path."""
+    return str(path.resolve()).replace(os.sep, "_").replace(":", "_")
+
+
 def _state_file(path: Path) -> Path:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    key = str(path.resolve()).replace(os.sep, "_").replace(":", "_")
+    """Return the per-document daemon state file: ``<STATE_DIR>/<key>/daemon.json``."""
+    key = _state_key(path)
+    d = STATE_DIR / key
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "daemon.json"
+
+
+def _legacy_state_file(path: Path) -> Path:
+    """Return the old-style flat state file for backward-compat reads."""
+    key = _state_key(path)
     return STATE_DIR / f"{key}.json"
+
+
+def _session_file(path: Path) -> Path:
+    """Return the per-document session snapshot file: ``<STATE_DIR>/<key>/session.json``."""
+    key = _state_key(path)
+    d = STATE_DIR / key
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "session.json"
+
+
+def _read_state_file(path: Path) -> Path | None:
+    """Return the existing state file (new or legacy) for *path*, or None."""
+    sf = _state_file(path)
+    if sf.exists():
+        return sf
+    legacy = _legacy_state_file(path)
+    if legacy.exists():
+        return legacy
+    return None
+
+
+def _save_session(session: Session) -> None:
+    """Write the session snapshot to disk (write-through persistence)."""
+    sf = _session_file(session.path)
+    try:
+        snap = session.snapshot()
+        sf.write_text(json.dumps(snap), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_session(path: Path) -> dict | None:
+    """Read the saved session snapshot for *path*, or None if not found."""
+    sf = _session_file(path)
+    if not sf.exists():
+        return None
+    try:
+        return json.loads(sf.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+
+
+def _purge_session(path: Path) -> bool:
+    """Delete the saved session snapshot for *path*. Returns True if removed."""
+    sf = _session_file(path)
+    try:
+        if sf.exists():
+            sf.unlink()
+            return True
+    except OSError:
+        pass
+    return False
 
 
 def _find_running(path: Path) -> int | None:
     """Return the port of a live daemon for `path`, or None."""
-    sf = _state_file(path)
-    if not sf.exists():
+    sf = _read_state_file(path)
+    if sf is None:
         return None
     try:
         info = json.loads(sf.read_text())
@@ -347,8 +412,20 @@ def _idle_reaper(session: Session, server: Server, timeout: float):
 # ---------------------------------------------------------------------------
 
 
-def _run_daemon(path: Path, port: int, open_browser: bool):
+def _run_daemon(path: Path, port: int, open_browser: bool, restore: bool = False):
     session = Session(path)
+
+    # Restore saved session state if requested and available.
+    if restore:
+        saved = _load_session(path)
+        if saved is not None:
+            session.restore(saved)
+
+    # Set up write-through persistence.
+    session.on_change = lambda: _save_session(session)
+    # Save once immediately so the session file exists even before any edits.
+    _save_session(session)
+
     html = build_html(path.name)
 
     class Bound(Handler):
@@ -400,7 +477,7 @@ def _run_daemon(path: Path, port: int, open_browser: bool):
             pass
 
 
-def _spawn_daemon(path: Path, open_browser: bool) -> int:
+def _spawn_daemon(path: Path, open_browser: bool, restore: bool = False) -> int:
     """Fork a detached daemon for `path`; return its port."""
     port = _free_port(DEFAULT_PORT)
 
@@ -414,7 +491,7 @@ def _spawn_daemon(path: Path, open_browser: bool) -> int:
         os.dup2(devnull, 1)
         os.dup2(devnull, 2)
         try:
-            _run_daemon(path, port, open_browser)
+            _run_daemon(path, port, open_browser, restore=restore)
         finally:
             os._exit(0)
 
@@ -426,8 +503,8 @@ def _spawn_daemon(path: Path, open_browser: bool) -> int:
     raise RuntimeError("daemon failed to start")
 
 
-def _ensure_daemon(path: Path, open_browser: bool) -> int:
+def _ensure_daemon(path: Path, open_browser: bool, restore: bool = False) -> int:
     existing = _find_running(path)
     if existing:
         return existing
-    return _spawn_daemon(path, open_browser)
+    return _spawn_daemon(path, open_browser, restore=restore)

@@ -30,7 +30,10 @@ def _env(state_dir: Path, idle_timeout: str) -> dict[str, str]:
 
 
 def _state_file(state_dir: Path) -> Path | None:
-    files = list(state_dir.glob("*.json"))
+    files = list(state_dir.glob("*/daemon.json"))
+    if not files:
+        # Fall back to old-style flat files.
+        files = list(state_dir.glob("*.json"))
     return files[0] if files else None
 
 

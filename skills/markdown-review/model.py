@@ -12,6 +12,7 @@ from __future__ import annotations
 import difflib
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -79,8 +80,13 @@ class Session:
 
     def __init__(self, path: Path):
         self.path = path
-        self.lock = threading.Lock()
+        # RLock so on_change callbacks (which call snapshot()) can re-enter.
+        self.lock = threading.RLock()
         self._cond = threading.Condition(self.lock)
+
+        # Optional write-through persistence hook. Set by server.py to a
+        # closure that writes session.snapshot() to disk after every mutation.
+        self.on_change: Callable[[], None] | None = None
 
         self.original_text: str = _read(path)
         self.current_text: str = self.original_text
@@ -98,6 +104,13 @@ class Session:
         # Set true when the user clicks "Send to LLM"; unblocks review-wait.
         self.submitted: bool = False
         self.last_activity: float = time.time()
+
+    # -- change notification ------------------------------------------------
+
+    def _notify_change(self) -> None:
+        """Fire the on_change callback if one is set (write-through persist)."""
+        if self.on_change is not None:
+            self.on_change()
 
     # -- edits --------------------------------------------------------------
 
@@ -153,6 +166,7 @@ class Session:
             _write(self.path, text)
 
             self._cond.notify_all()
+            self._notify_change()
             return rec
 
     def clear_diffs(self, keep_current: bool = True) -> int:
@@ -172,6 +186,7 @@ class Session:
                 self.version += 1
                 self.last_activity = time.time()
                 self._cond.notify_all()
+                self._notify_change()
             return removed
 
     # -- comments -----------------------------------------------------------
@@ -204,6 +219,7 @@ class Session:
             self.version += 1
             self.last_activity = time.time()
             self._cond.notify_all()
+            self._notify_change()
             return c
 
     def delete_comment(self, cid: int) -> bool:
@@ -215,6 +231,7 @@ class Session:
                 self.version += 1
                 self.last_activity = time.time()
                 self._cond.notify_all()
+                self._notify_change()
             return changed
 
     def import_comments(self, comments: list) -> dict:
@@ -279,6 +296,7 @@ class Session:
                 self.version += 1
                 self.last_activity = time.time()
                 self._cond.notify_all()
+                self._notify_change()
         return {
             "imported": imported,
             "skipped_duplicates": skipped,
@@ -291,6 +309,7 @@ class Session:
             self.submitted = True
             self.last_activity = time.time()
             self._cond.notify_all()
+            self._notify_change()
 
     def reset_submitted(self) -> None:
         """Clear the submitted flag so the next ``review`` blocks again.
@@ -303,6 +322,7 @@ class Session:
             self._new_round_pending = True
             self.last_activity = time.time()
             self._cond.notify_all()
+            self._notify_change()
 
     def touch(self) -> None:
         """Bump ``last_activity`` without any state change.
@@ -364,6 +384,54 @@ class Session:
                 "edit_count": len(self.edits),
                 "comments": [c.to_dict() for c in self.comments],
             }
+
+    def restore(self, snap: dict) -> None:
+        """Populate this session from a snapshot dict (inverse of ``snapshot``).
+
+        Called by the daemon on startup to resume a saved session. All fields
+        are replaced wholesale — the session is treated as a blank slate.
+        """
+        with self._cond:
+            self.original_text = snap.get("original_text", "")
+            self.current_text = snap.get("current_text", self.original_text)
+            self.current_round = int(snap.get("current_round", 1))
+            self.submitted = bool(snap.get("submitted", False))
+            self.version = int(snap.get("version", 0))
+
+            self.edits = [
+                EditRecord(
+                    index=e.get("index", i),
+                    old=e.get("old", ""),
+                    new=e.get("new", ""),
+                    diff=e.get("diff", ""),
+                    round=int(e.get("round", 1)),
+                    ts=float(e.get("ts", 0.0)),
+                )
+                for i, e in enumerate(snap.get("edits", []))
+            ]
+
+            self.comments = []
+            for c in snap.get("comments", []):
+                comment = Comment(
+                    id=int(c.get("id", 0)),
+                    body=c.get("body", ""),
+                    quote=c.get("quote", ""),
+                    context_before=c.get("context_before", ""),
+                    context_after=c.get("context_after", ""),
+                    source=c.get("source", "doc"),
+                    round=int(c.get("round", 0) or 0),
+                    author=c.get("author", "You"),
+                    stale=bool(c.get("stale", False)),
+                    ts=float(c.get("ts", 0.0)),
+                )
+                self.comments.append(comment)
+
+            # Next comment id is one past the highest existing id.
+            self._comment_seq = max((c.id for c in self.comments), default=0)
+
+            # A restored session starts with no pending new round.
+            self._new_round_pending = False
+            self.last_activity = time.time()
 
 
 # ---------------------------------------------------------------------------

@@ -477,3 +477,111 @@ class TestHelpers:
         f = tmp_path / "f.md"
         _write(f, "hello\n")
         assert _read(f) == "hello\n"
+
+
+# ---------------------------------------------------------------------------
+# restore()
+# ---------------------------------------------------------------------------
+
+
+class TestRestore:
+    def test_restore_round_trip(self, tmp_path):
+        """snapshot → restore → re-snapshot produces identical output."""
+        doc = tmp_path / "doc.md"
+        doc.write_text("# Original\n\nHello world.\n")
+        s1 = Session(doc)
+        s1.apply_edit("Hello", "Goodbye")
+        s1.add_comment("nice edit", quote="Goodbye")
+        s1.submit()
+        s1.reset_submitted()  # arms round 2
+        snap1 = s1.snapshot()
+
+        # Fresh session, restore from snapshot.
+        s2 = Session(doc)
+        s2.restore(snap1)
+        snap2 = s2.snapshot()
+
+        assert snap2["edits"] == snap1["edits"]
+        assert snap2["comments"] == snap1["comments"]
+        assert snap2["current_text"] == snap1["current_text"]
+        assert snap2["original_text"] == snap1["original_text"]
+        assert snap2["version"] == snap1["version"]
+        assert snap2["current_round"] == snap1["current_round"]
+        assert snap2["submitted"] == snap1["submitted"]
+
+    def test_restore_reconstructs_comment_seq(self, tmp_path):
+        """After restore, _comment_seq continues past restored ids."""
+        doc = tmp_path / "doc.md"
+        doc.write_text("hello\n")
+        s1 = Session(doc)
+        s1.add_comment("c1")
+        s1.add_comment("c2")
+        snap = s1.snapshot()
+
+        s2 = Session(doc)
+        s2.restore(snap)
+        c3 = s2.add_comment("c3")
+        assert c3.id == 3  # continues past restored ids 1 and 2
+
+    def test_restore_clears_new_round_pending(self, tmp_path):
+        """A restored session starts without _new_round_pending."""
+        doc = tmp_path / "doc.md"
+        doc.write_text("hello\n")
+        s1 = Session(doc)
+        s1.reset_submitted()  # arms next round
+        snap = s1.snapshot()
+
+        s2 = Session(doc)
+        s2.restore(snap)
+        s2.apply_edit("hello", "hi")
+        assert s2.current_round == 1  # did NOT advance to round 2
+
+    def test_restore_empty_snapshot(self, tmp_path):
+        """Restoring from a minimal snapshot does not crash."""
+        doc = tmp_path / "doc.md"
+        doc.write_text("hello\n")
+        s = Session(doc)
+        s.restore({"current_text": "restored\n", "original_text": "orig\n"})
+        assert s.current_text == "restored\n"
+        assert s.original_text == "orig\n"
+        assert s.edits == []
+        assert s.comments == []
+
+
+# ---------------------------------------------------------------------------
+# on_change callback
+# ---------------------------------------------------------------------------
+
+
+class TestOnChange:
+    def test_on_change_fires_on_mutations(self, session):
+        calls = []
+        session.on_change = lambda: calls.append(1)
+
+        session.apply_edit("Hello", "Hi")
+        session.add_comment("note")
+        session.delete_comment(1)
+        session.submit()
+        session.reset_submitted()
+        session.import_comments([{"body": "imported"}])
+        session.clear_diffs()
+
+        assert len(calls) == 6
+
+    def test_on_change_does_not_fire_on_touch(self, session):
+        calls = []
+        session.on_change = lambda: calls.append(1)
+        session.touch()
+        assert calls == []
+
+    def test_on_change_does_not_fire_on_snapshots(self, session):
+        calls = []
+        session.on_change = lambda: calls.append(1)
+        session.snapshot()
+        session.comments_payload()
+        assert calls == []
+
+    def test_on_change_default_is_none(self, session):
+        # Without setting on_change, mutations should not crash.
+        session.apply_edit("Hello", "Hi")
+        session.add_comment("note")
