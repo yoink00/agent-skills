@@ -7,7 +7,7 @@ offline review loop that unit tests can't reach:
   * the page renders the embedded document from a ``file://`` URL,
   * the author prompt stamps comments with a name,
   * adding a doc-anchored comment works in-memory,
-  * clicking "Export comments" downloads a JSON file with the right shape,
+  * clicking "Export comments" opens a JSON box and a Download button saves a file,
   * that JSON round-trips back through ``mdedit.py import-comments``.
 
 Requires Playwright + chromium:
@@ -166,8 +166,8 @@ def test_doc_anchored_comment_in_memory(tmp_path):
 
 
 def test_export_downloads_json_with_author(tmp_path):
-    """Clicking Export comments downloads a JSON file whose comments carry
-    the author and the full comment shape."""
+    """Export comments opens a JSON box (no auto-download); the Download JSON
+    button then saves a file carrying the author and full comment shape."""
     html_path = _write_share_html(tmp_path)
     with sync_playwright() as p:
         browser = p.chromium.launch()
@@ -180,9 +180,16 @@ def test_export_downloads_json_with_author(tmp_path):
         page.click("#general-add")
         page.wait_for_selector(".comment-card")
 
-        # Trigger the export and capture the download.
+        # Export opens the copy/paste box; it must NOT auto-download, so we
+        # wait for the box to appear rather than for a download event.
+        page.click("#send-btn")
+        page.wait_for_selector("#export-box.open")
+        box_text = page.locator("#export-json").input_value()
+        assert json.loads(box_text)["comments"][0]["author"] == "Eve"
+
+        # The explicit Download JSON button is what triggers the file save.
         with page.expect_download(timeout=5000) as dl_info:
-            page.click("#send-btn")
+            page.click("#download-json")
         download = dl_info.value
         assert download.suggested_filename == "share-doc.comments.json"
 
@@ -210,9 +217,85 @@ def test_export_downloads_json_with_author(tmp_path):
         ):
             assert key in c, key
 
-        # The copy-paste box is also populated with the same JSON.
-        box_text = page.locator("#export-json").input_value()
-        assert json.loads(box_text)["comments"][0]["author"] == "Eve"
+        browser.close()
+
+
+def test_export_no_automatic_download(tmp_path):
+    """Clicking Export comments must not trigger a download on its own."""
+    html_path = _write_share_html(tmp_path)
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(html_path.as_uri())
+        page.wait_for_selector("#md-render")
+        _set_author(page, "Eve")
+        page.fill("#general-input", "ship it")
+        page.click("#general-add")
+        page.wait_for_selector(".comment-card")
+
+        # Expect NO download within 1s of clicking Export comments.
+        download_registered = []
+        page.on("download", lambda d: download_registered.append(d))
+        page.click("#send-btn")
+        page.wait_for_selector("#export-box.open")
+        page.wait_for_timeout(1000)
+        assert download_registered == []
+        browser.close()
+
+
+def test_import_from_paste_box_merges_comments(tmp_path):
+    """The Import ▾ dropdown opens a paste box whose JSON is merged in,
+    deduped against existing comments."""
+    html_path = _write_share_html(tmp_path)
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        page.goto(html_path.as_uri())
+        page.wait_for_selector("#md-render")
+        _set_author(page, "Eve")
+        page.fill("#general-input", "original note")
+        page.click("#general-add")
+        page.wait_for_selector(".comment-card")
+
+        # Open the Import dropdown and pick the paste option.
+        page.click("#import-btn")
+        page.wait_for_selector("#import-menu.open")
+        page.click("#import-menu-text")
+        page.wait_for_selector("#import-box.open")
+
+        payload = json.dumps(
+            {
+                "doc_name": "share-doc.md",
+                "comments": [
+                    {
+                        "body": "from friend",
+                        "quote": "",
+                        "context_before": "",
+                        "context_after": "",
+                        "source": "doc",
+                        "round": 0,
+                        "author": "Frank",
+                    },
+                    # Duplicate of Eve's existing general note → skipped.
+                    {
+                        "body": "original note",
+                        "quote": "",
+                        "context_before": "",
+                        "context_after": "",
+                        "source": "doc",
+                        "round": 0,
+                        "author": "Eve",
+                    },
+                ],
+            }
+        )
+        page.fill("#import-json", payload)
+        page.click("#import-apply")
+        page.wait_for_function(
+            "() => document.querySelectorAll('.comment-card').length === 2"
+        )
+        # Import box auto-closes on success.
+        page.wait_for_selector("#import-box.open", state="hidden")
         browser.close()
 
 
@@ -288,8 +371,10 @@ def test_exported_json_imports_back_into_live_session(tmp_path):
         page.fill("#general-input", "needs a timeline")
         page.click("#general-add")
         page.wait_for_selector(".comment-card")
+        page.click("#send-btn")
+        page.wait_for_selector("#export-box.open")
         with page.expect_download(timeout=5000) as dl_info:
-            page.click("#send-btn")
+            page.click("#download-json")
         dl_info.value.save_as(str(exported))
         browser.close()
 
