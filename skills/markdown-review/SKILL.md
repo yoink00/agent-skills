@@ -23,7 +23,7 @@ opens a browser viewer that:
 
 ## Requirements
 
-- **Python 3.10+** — the script is pure standard library, so there is nothing to
+- **Python 3.10+** — the tool is pure standard library, so there is nothing to
   `pip install`. It runs with the system `python3`.
 - **POSIX only** — the daemon backgrounds itself with `fork`, so it does not run
   on native Windows (use WSL there).

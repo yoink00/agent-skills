@@ -50,7 +50,13 @@ python_version = "3.10"
 strict = false
 warn_unused_ignores = true
 warn_redundant_casts = true
-files = ["skills/markdown-review/mdedit.py"]
+# Type-check every mdedit source module (model/frontend/server/cliutil/mdedit).
+# Test files are excluded: they import Playwright optionally and drive the tool
+# as a subprocess, so they aren't part of the typed surface. Following imports
+# means checking mdedit.py already pulls in the modules it depends on, but
+# listing the directory makes new modules covered automatically.
+files = ["skills/markdown-review"]
+exclude = ['test_.*\.py$']
 
 [tool.pytest.ini_options]
 # Discover every skill's tests without naming files in CI. Browser tests use
