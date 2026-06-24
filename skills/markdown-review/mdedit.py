@@ -883,28 +883,40 @@ function unwrapCommentMarks(root){{
 function wrapQuotes(root, quotes){{
   if(!quotes.length) return;
   quotes=[...quotes].sort((a,b)=>b.length-a.length);
-  const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{{
-    acceptNode(n){{ return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }}
-  }});
-  const textNodes=[]; while(walk.nextNode()) textNodes.push(walk.currentNode);
+  // Collect live text nodes fresh for each quote. Wrapping a quote splits its
+  // text node (replaceChild with a fragment), so a snapshot taken once up
+  // front would point at detached nodes (parentNode === null) for the second
+  // quote — wrapping it would then throw and silently skip every later quote.
+  const collect=()=>{{
+    const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{{
+      acceptNode(n){{ return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }}
+    }});
+    const nodes=[]; while(walk.nextNode()) nodes.push(walk.currentNode);
+    return nodes;
+  }};
+  const wrapNode=(node,q)=>{{
+    const text=node.nodeValue;
+    let idx=text.indexOf(q);
+    if(idx<0) return;
+    const frag=document.createDocumentFragment();
+    let last=0;
+    while(idx>=0){{
+      if(idx>last) frag.appendChild(document.createTextNode(text.slice(last,idx)));
+      const mk=document.createElement('mark');
+      mk.className='has-comment';
+      mk.textContent=text.slice(idx,idx+q.length);
+      frag.appendChild(mk);
+      last=idx+q.length;
+      idx=text.indexOf(q,last);
+    }}
+    if(last<text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+    node.parentNode.replaceChild(frag,node);
+  }};
   for(const q of quotes){{
-    for(const node of [...textNodes]){{
-      const text=node.nodeValue;
-      let idx=text.indexOf(q);
-      if(idx<0) continue;
-      const frag=document.createDocumentFragment();
-      let last=0;
-      while(idx>=0){{
-        if(idx>last) frag.appendChild(document.createTextNode(text.slice(last,idx)));
-        const mk=document.createElement('mark');
-        mk.className='has-comment';
-        mk.textContent=text.slice(idx,idx+q.length);
-        frag.appendChild(mk);
-        last=idx+q.length;
-        idx=text.indexOf(q,last);
-      }}
-      if(last<text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-      node.parentNode.replaceChild(frag,node);
+    for(const node of collect()){{
+      // A fresh collect() returns only live nodes, but guard anyway in case a
+      // sibling quote already replaced one earlier in this same pass.
+      if(node.parentNode) wrapNode(node,q);
     }}
   }}
 }}
