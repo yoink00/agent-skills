@@ -618,6 +618,14 @@ body{
 }
 #md-render mark.has-comment.flash{animation:cmflash 1.1s ease;}
 @keyframes cmflash{0%{background:rgba(0,113,240,.65);}100%{background:rgba(0,113,240,.22);}}
+
+/* inline highlights for diff lines that have a comment attached */
+#diff-render mark.has-comment{
+  background:rgba(0,113,240,.30);color:inherit;border-radius:2px;padding:0 1px;
+  outline:1px solid rgba(0,113,240,.55);outline-offset:-1px;
+}
+#diff-render .diff-line.add mark.has-comment{background:rgba(0,170,90,.34);outline-color:rgba(0,170,90,.7);}
+#diff-render .diff-line.del mark.has-comment{background:rgba(224,90,75,.40);outline-color:rgba(224,90,75,.75);}
 """
 
 
@@ -824,6 +832,7 @@ function renderDiff(){{
   }});
   const clearBtn=document.getElementById('clear-old-rounds');
   if(clearBtn) clearBtn.addEventListener('click',clearOldRounds);
+  applyDiffCommentHighlights();
 }}
 
 async function clearOldRounds(){{
@@ -868,15 +877,12 @@ function unwrapCommentMarks(root){{
     p.removeChild(m); p.normalize();
   }});
 }}
-function applyCommentHighlights(){{
-  const root=mdRender;
-  unwrapCommentMarks(root);
-  const quotes=[...new Set(
-    state.comments.filter(c=>c.source==='doc'&&c.quote).map(c=>c.quote)
-  )];
+// Wrap every occurrence of each `quotes` string inside `root`'s text nodes in
+// a <mark class="has-comment">. Longest quotes first so shorter substrings
+// don't steal their text nodes. Idempotent when the caller unwraps first.
+function wrapQuotes(root, quotes){{
   if(!quotes.length) return;
-  // Longest quotes first so shorter substrings don't steal their text nodes.
-  quotes.sort((a,b)=>b.length-a.length);
+  quotes=[...quotes].sort((a,b)=>b.length-a.length);
   const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{{
     acceptNode(n){{ return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }}
   }});
@@ -900,6 +906,36 @@ function applyCommentHighlights(){{
       if(last<text.length) frag.appendChild(document.createTextNode(text.slice(last)));
       node.parentNode.replaceChild(frag,node);
     }}
+  }}
+}}
+
+// Highlight document-view selections that have a comment attached. Each
+// comment whose source is 'doc' carries a `quote` (the exact selected text);
+// we wrap every occurrence in the rendered document so the reader can see at
+// a glance which spans have feedback.
+function applyCommentHighlights(){{
+  unwrapCommentMarks(mdRender);
+  const quotes=[...new Set(
+    state.comments.filter(c=>c.source==='doc'&&c.quote).map(c=>c.quote)
+  )];
+  wrapQuotes(mdRender, quotes);
+}}
+
+// Highlight diff-view selections that have a comment attached. A diff comment
+// is anchored to a specific round, so we scope the search to that round's
+// group and only wrap within its diff lines.
+function applyDiffCommentHighlights(){{
+  unwrapCommentMarks(diffRender);
+  // Group quotes by round so each is scoped to its own round-group element.
+  const byRound=new Map();
+  for(const c of state.comments){{
+    if(c.source!=='diff'||!c.round||!c.quote) continue;
+    if(!byRound.has(c.round)) byRound.set(c.round, new Set());
+    byRound.get(c.round).add(c.quote);
+  }}
+  for(const [round, quotes] of byRound){{
+    const grp=diffRender.querySelector('.round-group[data-round="'+round+'"]');
+    if(grp) wrapQuotes(grp, [...quotes]);
   }}
 }}
 
@@ -1025,8 +1061,9 @@ async function refresh(){{
   renderComments();
   // Comment add/delete bumps the version but not the document text; re-apply
   // highlights so new selections light up (and deleted ones clear) without
-  // re-rendering the document body.
+  // re-rendering either view's body.
   applyCommentHighlights();
+  applyDiffCommentHighlights();
   document.getElementById('doc-meta').textContent =
     state.edits.length+' edit'+(state.edits.length!==1?'s':'');
 }}
