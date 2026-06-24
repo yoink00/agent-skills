@@ -360,11 +360,54 @@ body{
   border-radius:5px;color:var(--bg-100);font-size:0.76rem;padding:7px;outline:none;
   font-family:"JetBrains Mono","Fira Code",Consolas,monospace;
 }
-#export-box .copy-btn{
-  margin-top:7px;background:var(--bg-700);border:1px solid var(--bg-600);color:var(--bg-200);
+#export-box .row{display:flex;gap:7px;margin-top:7px;}
+#export-box .copy-btn,#export-box .download-btn{
+  background:var(--bg-700);border:1px solid var(--bg-600);color:var(--bg-200);
   border-radius:5px;padding:5px 14px;font-size:0.78rem;cursor:pointer;
 }
-#export-box .copy-btn:hover{background:var(--bg-600);color:var(--bg-100);}
+#export-box .copy-btn:hover,#export-box .download-btn:hover{background:var(--bg-600);color:var(--bg-100);}
+
+/* import dropdown (share page top bar) */
+#import-wrap{position:relative;}
+#import-btn{
+  background:var(--bg-700);border:1px solid var(--bg-600);color:var(--bg-200);
+  padding:6px 14px;border-radius:6px;font-size:0.78rem;font-weight:500;
+  cursor:pointer;transition:background .12s,border-color .12s;
+}
+#import-btn:hover{background:var(--bg-600);color:var(--bg-100);border-color:var(--bb-500);}
+#import-menu{
+  display:none;position:absolute;top:calc(100% + 4px);right:0;z-index:50;
+  background:var(--bg-800);border:1px solid var(--bg-600);border-radius:6px;
+  box-shadow:0 6px 20px rgba(0,0,0,.4);min-width:170px;overflow:hidden;
+}
+#import-menu.open{display:block;}
+#import-menu button{
+  display:block;width:100%;text-align:left;background:none;border:none;color:var(--bg-200);
+  padding:8px 14px;font-size:0.78rem;cursor:pointer;font-family:inherit;
+}
+#import-menu button:hover{background:var(--bg-700);color:var(--bg-100);}
+
+/* import box (share page) */
+#import-box{
+  display:none;margin:10px;padding:12px;background:var(--bg-800);border:1px solid var(--bb-500);
+  border-radius:8px;
+}
+#import-box.open{display:block;}
+#import-box h4{font-size:0.82rem;color:var(--bb-300);margin-bottom:8px;}
+#import-box p{font-size:0.74rem;color:var(--bg-400);margin-bottom:8px;}
+#import-box textarea{
+  width:100%;height:120px;resize:vertical;background:var(--bg-900);border:1px solid var(--bg-600);
+  border-radius:5px;color:var(--bg-100);font-size:0.76rem;padding:7px;outline:none;
+  font-family:"JetBrains Mono","Fira Code",Consolas,monospace;
+}
+#import-box .actions{display:flex;gap:7px;margin-top:7px;}
+#import-box button{
+  background:var(--bg-700);border:1px solid var(--bg-600);color:var(--bg-200);
+  border-radius:5px;padding:5px 14px;font-size:0.78rem;cursor:pointer;
+}
+#import-box button.primary{background:var(--bb-500);border:none;color:#fff;font-weight:600;}
+#import-box button:hover{background:var(--bg-600);color:var(--bg-100);}
+#import-box button.primary:hover{background:var(--bb-400);}
 """
 
 
@@ -837,9 +880,9 @@ async function deleteComment(id){
   applyDiffCommentHighlights();
 }
 
-// ── Export comments ──────────────────────────────────────────────────
-document.getElementById('send-btn').addEventListener('click',()=>{
-  const exportData={
+// ── Export comments ──────────────────────────────
+function buildExportJson(){
+  return JSON.stringify({
     doc_name:DOC_NAME,
     exported_at:new Date().toISOString(),
     comments:state.comments.map(c=>({
@@ -851,23 +894,32 @@ document.getElementById('send-btn').addEventListener('click',()=>{
       round:c.round,
       author:c.author||'Anonymous'
     }))
-  };
-  const json=JSON.stringify(exportData,null,2);
-  // Download
+  },null,2);
+}
+
+function downloadJson(json, filename){
   const blob=new Blob([json],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url;
-  a.download=DOC_NAME.replace(/\\.md$/,'')+'.comments.json';
+  a.download=filename;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  // Also show in copy-paste box
+}
+
+function openExportBox(json){
   const box=document.getElementById('export-box');
   box.classList.add('open');
   document.getElementById('export-json').value=json;
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+document.getElementById('send-btn').addEventListener('click',()=>{
+  const json=buildExportJson();
+  openExportBox(json);
   const n=state.comments.length;
   toast(n>0
-    ? '\u2713 Exported '+n+' comment'+(n!==1?'s':'')+' \u2014 download or copy below'
+    ? '\u2713 Exported '+n+' comment'+(n!==1?'s':'')+' \u2014 copy or download below'
     : '\u2713 No comments to export','ok');
 });
 
@@ -877,6 +929,111 @@ document.getElementById('copy-json').addEventListener('click',()=>{
   ta.select();
   try{ document.execCommand('copy'); toast('Copied to clipboard','ok'); }
   catch(_){ toast('Copy failed \u2014 select and copy manually'); }
+});
+
+// Download-as-file button
+document.getElementById('download-json').addEventListener('click',()=>{
+  const ta=document.getElementById('export-json');
+  const json=ta.value||buildExportJson();
+  downloadJson(json, DOC_NAME.replace(/\\.md$/,'')+'.comments.json');
+  toast('Downloaded '+DOC_NAME.replace(/\\.md$/,'')+'.comments.json','ok');
+});
+
+// ── Import comments ──────────────────────────────
+// Merge a comments array into state.comments, deduping by
+// (author, quote, body, source, round). Returns {imported, skipped}.
+function mergeImported(incoming){
+  const key=c=>JSON.stringify([c.author||'Anonymous',c.quote||'',c.body||'',c.source||'',c.round||0]);
+  const existing=new Set(state.comments.map(key));
+  let imported=0, skipped=0;
+  for(const c of incoming){
+    if(!c||typeof c.body!=='string') continue;
+    const k=key(c);
+    if(existing.has(k)){ skipped++; continue; }
+    existing.add(k);
+    state.comments.push({
+      id:nextCommentId++,
+      body:c.body,
+      quote:c.quote||'',
+      context_before:c.context_before||'',
+      context_after:c.context_after||'',
+      source:c.source||'doc',
+      round:c.round||0,
+      author:c.author||'Anonymous',
+      stale:false
+    });
+    imported++;
+  }
+  renderComments();
+  applyCommentHighlights();
+  applyDiffCommentHighlights();
+  return {imported, skipped};
+}
+
+function parseCommentsJson(text){
+  let data;
+  try{ data=JSON.parse(text); }
+  catch(_){ throw new Error('Not valid JSON'); }
+  if(!data){ throw new Error('Empty payload'); }
+  const arr=Array.isArray(data)?data:data.comments;
+  if(!Array.isArray(arr)) throw new Error('No \"comments\" array found');
+  return arr;
+}
+
+// Dropdown toggle
+document.getElementById('import-btn').addEventListener('click',(e)=>{
+  e.stopPropagation();
+  document.getElementById('import-menu').classList.toggle('open');
+});
+document.addEventListener('click',()=>{
+  document.getElementById('import-menu').classList.remove('open');
+});
+document.getElementById('import-menu').addEventListener('click',(e)=>e.stopPropagation());
+
+// Import via paste box
+document.getElementById('import-menu-text').addEventListener('click',()=>{
+  document.getElementById('import-menu').classList.remove('open');
+  const box=document.getElementById('import-box');
+  box.classList.add('open');
+  const ta=document.getElementById('import-json');
+  ta.value=''; ta.focus();
+  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+});
+document.getElementById('import-cancel').addEventListener('click',()=>{
+  document.getElementById('import-box').classList.remove('open');
+});
+document.getElementById('import-apply').addEventListener('click',()=>{
+  const ta=document.getElementById('import-json');
+  try{
+    const arr=parseCommentsJson(ta.value);
+    const {imported, skipped}=mergeImported(arr);
+    toast('\u2713 Imported '+imported+' comment'+(imported!==1?'s':'')+
+          (skipped? ' ('+skipped+' duplicate'+(skipped!==1?'s':'')+' skipped)':''), 'ok');
+    if(imported>0) document.getElementById('import-box').classList.remove('open');
+  }catch(err){ toast('Import failed: '+err.message); }
+});
+
+// Import via file picker
+document.getElementById('import-menu-file').addEventListener('click',()=>{
+  document.getElementById('import-menu').classList.remove('open');
+  document.getElementById('import-file').click();
+});
+document.getElementById('import-file').addEventListener('change',(e)=>{
+  const file=e.target.files && e.target.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    try{
+      const arr=parseCommentsJson(String(reader.result||''));
+      const {imported, skipped}=mergeImported(arr);
+      toast('\u2713 Imported '+imported+' comment'+(imported!==1?'s':'')+
+            (skipped? ' ('+skipped+' duplicate'+(skipped!==1?'s':'')+' skipped)':'')+
+            ' from '+file.name,'ok');
+    }catch(err){ toast('Import failed: '+err.message); }
+  };
+  reader.onerror=()=>toast('Could not read '+file.name);
+  reader.readAsText(file);
+  e.target.value='';
 });
 
 // ── Init from embedded snapshot ──────────────────────────────────────
@@ -1017,7 +1174,14 @@ def build_share_html(snapshot: dict) -> str:
     <button id="view-rendered" class="active">Rendered</button>
     <button id="view-diff">Changes</button>
   </div>
-  <button id="send-btn" title="Export your comments as JSON">Export comments</button>
+  <button id="send-btn" title="Show your comments as JSON to copy or download">Export comments</button>
+  <div id="import-wrap">
+    <button id="import-btn" title="Import comments from another reviewer">Import ▾</button>
+    <div id="import-menu">
+      <button id="import-menu-text" title="Paste JSON into a text box">Import Comments…</button>
+      <button id="import-menu-file" title="Pick a .comments.json file">Import from File…</button>
+    </div>
+  </div>
 </div>
 
 <div id="share-banner">
@@ -1060,10 +1224,24 @@ def build_share_html(snapshot: dict) -> str:
 
 <div id="export-box">
   <h4>✓ Comments exported</h4>
-  <p>Send the downloaded file back, or copy the JSON below and paste it into chat.</p>
+  <p>Copy the JSON below and paste it into chat, or download a file to send back.</p>
   <textarea id="export-json" readonly></textarea>
-  <button class="copy-btn" id="copy-json">Copy to clipboard</button>
+  <div class="row">
+    <button class="copy-btn" id="copy-json">Copy to clipboard</button>
+    <button class="download-btn" id="download-json">Download JSON</button>
+  </div>
 </div>
+
+<div id="import-box">
+  <h4>Import comments</h4>
+  <p>Paste exported comment JSON below, then apply. Duplicates are skipped automatically.</p>
+  <textarea id="import-json" placeholder='{{"comments":[...]}}'></textarea>
+  <div class="actions">
+    <button class="primary" id="import-apply">Import</button>
+    <button id="import-cancel">Cancel</button>
+  </div>
+</div>
+<input type="file" id="import-file" accept="application/json,.json" style="display:none">
 
 <div id="toast"></div>
 
