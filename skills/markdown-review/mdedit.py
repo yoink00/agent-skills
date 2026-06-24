@@ -97,17 +97,16 @@ VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 
 # local filename -> CDN URL (used as fallback and by update-vendor.sh)
 VENDOR_ASSETS = {
-    "marked.min.js":
-        "https://cdn.jsdelivr.net/npm/marked@12/marked.min.js",
-    "highlight.min.js":
-        "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js",
-    "highlight-onedark.min.css":
-        "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/base16/onedark.min.css",
+    "marked.min.js": "https://cdn.jsdelivr.net/npm/marked@12/marked.min.js",
+    "highlight.min.js": "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js",
+    "highlight-onedark.min.css": "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/base16/onedark.min.css",
 }
 
 # Browser MIME types for the vendored assets we serve.
-_VENDOR_MIME = {".js": "text/javascript; charset=utf-8",
-                ".css": "text/css; charset=utf-8"}
+_VENDOR_MIME = {
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+}
 
 
 def _asset_url(filename: str) -> str:
@@ -121,6 +120,7 @@ def _asset_url(filename: str) -> str:
 # Session model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class EditRecord:
     """A single applied search/replace edit and its rendered diff."""
@@ -128,8 +128,8 @@ class EditRecord:
     index: int
     old: str
     new: str
-    diff: str                       # unified diff (text) for this single edit
-    round: int = 1                  # which review round this edit belongs to
+    diff: str  # unified diff (text) for this single edit
+    round: int = 1  # which review round this edit belongs to
     ts: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
@@ -149,11 +149,11 @@ class Comment:
 
     id: int
     body: str
-    quote: str = ""                 # the selected text the comment is anchored to
-    context_before: str = ""        # a little surrounding context for the LLM
+    quote: str = ""  # the selected text the comment is anchored to
+    context_before: str = ""  # a little surrounding context for the LLM
     context_after: str = ""
-    source: str = "doc"             # "doc" (rendered view) or "diff" (Changes view)
-    round: int = 0                  # round the diff comment refers to (0 = n/a)
+    source: str = "doc"  # "doc" (rendered view) or "diff" (Changes view)
+    round: int = 0  # round the diff comment refers to (0 = n/a)
     ts: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
@@ -202,8 +202,9 @@ class Session:
 
     # -- edits --------------------------------------------------------------
 
-    def apply_edit(self, old: str, new: str, replace_all: bool = False,
-                   auto_clear: bool = True) -> EditRecord:
+    def apply_edit(
+        self, old: str, new: str, replace_all: bool = False, auto_clear: bool = True
+    ) -> EditRecord:
         """Apply one search/replace edit. Raises ValueError on a bad match.
 
         If a new round is pending (the user submitted a review since the last
@@ -228,15 +229,22 @@ class Session:
                 self.current_round += 1
                 self._new_round_pending = False
                 if auto_clear:
-                    self.edits = [e for e in self.edits if e.round == self.current_round]
+                    self.edits = [
+                        e for e in self.edits if e.round == self.current_round
+                    ]
 
             before = text
             text = text.replace(old, new) if replace_all else text.replace(old, new, 1)
             self.current_text = text
 
             diff = _unified_diff(before, text, self.path.name)
-            rec = EditRecord(index=len(self.edits), old=old, new=new, diff=diff,
-                             round=self.current_round)
+            rec = EditRecord(
+                index=len(self.edits),
+                old=old,
+                new=new,
+                diff=diff,
+                round=self.current_round,
+            )
             self.edits.append(rec)
             self.version += 1
             self.last_activity = time.time()
@@ -268,14 +276,26 @@ class Session:
 
     # -- comments -----------------------------------------------------------
 
-    def add_comment(self, body: str, quote: str = "",
-                    before: str = "", after: str = "",
-                    source: str = "doc", round: int = 0) -> Comment:
+    def add_comment(
+        self,
+        body: str,
+        quote: str = "",
+        before: str = "",
+        after: str = "",
+        source: str = "doc",
+        round: int = 0,
+    ) -> Comment:
         with self._cond:
             self._comment_seq += 1
-            c = Comment(id=self._comment_seq, body=body, quote=quote,
-                        context_before=before, context_after=after,
-                        source=source, round=round)
+            c = Comment(
+                id=self._comment_seq,
+                body=body,
+                quote=quote,
+                context_before=before,
+                context_after=after,
+                source=source,
+                round=round,
+            )
             self.comments.append(c)
             self.version += 1
             self.last_activity = time.time()
@@ -376,6 +396,7 @@ class Session:
 # ---------------------------------------------------------------------------
 # File / diff helpers
 # ---------------------------------------------------------------------------
+
 
 def _read(path: Path) -> str:
     try:
@@ -965,6 +986,7 @@ refresh().then(poll);
 # HTTP server
 # ---------------------------------------------------------------------------
 
+
 class Handler(http.server.BaseHTTPRequestHandler):
     session: Session
     html: str
@@ -1055,7 +1077,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/ping":
             self._json({"ok": True, "path": str(self.session.path)})
         elif path.startswith("/vendor/"):
-            self._serve_vendor(path[len("/vendor/"):])
+            self._serve_vendor(path[len("/vendor/") :])
         else:
             self._json({"error": "not found"}, 404)
 
@@ -1066,29 +1088,43 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = self._read_body()
             edits = data.get("edits")
             if edits is None:
-                edits = [{"old": data.get("old", ""), "new": data.get("new", ""),
-                          "replace_all": data.get("replace_all", False)}]
+                edits = [
+                    {
+                        "old": data.get("old", ""),
+                        "new": data.get("new", ""),
+                        "replace_all": data.get("replace_all", False),
+                    }
+                ]
             applied, errors = [], []
             for i, e in enumerate(edits):
                 try:
                     rec = self.session.apply_edit(
-                        e.get("old", ""), e.get("new", ""),
-                        bool(e.get("replace_all", False)))
+                        e.get("old", ""),
+                        e.get("new", ""),
+                        bool(e.get("replace_all", False)),
+                    )
                     applied.append(rec.to_dict())
                 except ValueError as exc:
                     errors.append({"index": i, "error": str(exc)})
-            self._json({
-                "applied": applied,
-                "errors": errors,
-                "version": self.session.version,
-                "ok": not errors,
-            }, 200 if not errors else 422)
+            self._json(
+                {
+                    "applied": applied,
+                    "errors": errors,
+                    "version": self.session.version,
+                    "ok": not errors,
+                },
+                200 if not errors else 422,
+            )
         elif path == "/api/comment":
             data = self._read_body()
             c = self.session.add_comment(
-                data.get("body", ""), data.get("quote", ""),
-                data.get("context_before", ""), data.get("context_after", ""),
-                data.get("source", "doc"), int(data.get("round", 0) or 0))
+                data.get("body", ""),
+                data.get("quote", ""),
+                data.get("context_before", ""),
+                data.get("context_after", ""),
+                data.get("source", "doc"),
+                int(data.get("round", 0) or 0),
+            )
             self._json(c.to_dict())
         elif path == "/api/comment/delete":
             data = self._read_body()
@@ -1098,8 +1134,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = self._read_body()
             keep_current = bool(data.get("keep_current", True))
             removed = self.session.clear_diffs(keep_current=keep_current)
-            self._json({"ok": True, "removed": removed,
-                        "current_round": self.session.current_round})
+            self._json(
+                {
+                    "ok": True,
+                    "removed": removed,
+                    "current_round": self.session.current_round,
+                }
+            )
         elif path == "/api/submit":
             self.session.submit()
             self._json({"ok": True})
@@ -1124,6 +1165,7 @@ class Server(socketserver.ThreadingTCPServer):
 # ---------------------------------------------------------------------------
 # Daemon registry — map a document path to a running server's port
 # ---------------------------------------------------------------------------
+
 
 def _state_file(path: Path) -> Path:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1182,8 +1224,10 @@ def _free_port(preferred: int) -> int:
 # HTTP client helpers (used by CLI sub-commands)
 # ---------------------------------------------------------------------------
 
-def _request(port: int, method: str, path: str, body: dict | None = None,
-             timeout: float = 30.0) -> tuple[int, dict]:
+
+def _request(
+    port: int, method: str, path: str, body: dict | None = None, timeout: float = 30.0
+) -> tuple[int, dict]:
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
     payload = None
     headers = {}
@@ -1203,6 +1247,7 @@ def _request(port: int, method: str, path: str, body: dict | None = None,
 # ---------------------------------------------------------------------------
 # Idle shutdown
 # ---------------------------------------------------------------------------
+
 
 def _idle_reaper(session: Session, server: Server, timeout: float):
     """Background thread that shuts down the server after `timeout` seconds
@@ -1225,12 +1270,14 @@ def _idle_reaper(session: Session, server: Server, timeout: float):
 # Daemon entry point (run in a forked child)
 # ---------------------------------------------------------------------------
 
+
 def _run_daemon(path: Path, port: int, open_browser: bool):
     session = Session(path)
     html = build_html(path.name)
 
     class Bound(Handler):
         pass
+
     Bound.session = session
     Bound.html = html
 
@@ -1238,23 +1285,35 @@ def _run_daemon(path: Path, port: int, open_browser: bool):
 
     # Register so CLI clients can find us.
     sf = _state_file(path)
-    sf.write_text(json.dumps({"port": port, "path": str(path.resolve()),
-                              "pid": os.getpid(), "started": time.time()}))
+    sf.write_text(
+        json.dumps(
+            {
+                "port": port,
+                "path": str(path.resolve()),
+                "pid": os.getpid(),
+                "started": time.time(),
+            }
+        )
+    )
 
     if open_browser:
-        threading.Timer(0.4, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+        threading.Timer(
+            0.4, lambda: webbrowser.open(f"http://127.0.0.1:{port}")
+        ).start()
 
     # Idle auto-shutdown.
     idle_timeout = float(os.environ.get("MDEDIT_IDLE_TIMEOUT", "300"))
     if idle_timeout > 0:
-        threading.Thread(target=_idle_reaper, args=(session, httpd, idle_timeout),
-                         daemon=True).start()
+        threading.Thread(
+            target=_idle_reaper, args=(session, httpd, idle_timeout), daemon=True
+        ).start()
 
     # Clean shutdown on SIGTERM / SIGHUP so `kill <pid>` removes the state file
     # via the `finally` block below.
     for sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, lambda *_: threading.Thread(
-            target=httpd.shutdown, daemon=True).start())
+        signal.signal(
+            sig, lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start()
+        )
 
     try:
         httpd.serve_forever()
@@ -1303,9 +1362,16 @@ def _ensure_daemon(path: Path, open_browser: bool) -> int:
 # ---------------------------------------------------------------------------
 
 _BACKSLASH_ESCAPES = {
-    "n": "\n", "t": "\t", "r": "\r", "b": "\b",
-    "f": "\f", "v": "\v", "0": "\0",
-    "\\": "\\", '"': '"', "'": "'",
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+    "b": "\b",
+    "f": "\f",
+    "v": "\v",
+    "0": "\0",
+    "\\": "\\",
+    '"': '"',
+    "'": "'",
 }
 _ESCAPE_RE = re.compile(r"\\(.)", re.DOTALL)
 
@@ -1319,8 +1385,7 @@ def _unescape_cli(s: str) -> str:
     unknown escapes are left untouched so genuine backslashes survive.
     --edits-json is not processed (JSON already decodes its own escapes).
     """
-    return _ESCAPE_RE.sub(
-        lambda m: _BACKSLASH_ESCAPES.get(m.group(1), m.group(0)), s)
+    return _ESCAPE_RE.sub(lambda m: _BACKSLASH_ESCAPES.get(m.group(1), m.group(0)), s)
 
 
 def cmd_open(args) -> int:
@@ -1328,35 +1393,58 @@ def cmd_open(args) -> int:
     if not path.exists():
         path.write_text("", encoding="utf-8")
     port = _ensure_daemon(path, open_browser=not args.no_browser)
-    print(json.dumps({"ok": True, "url": f"http://127.0.0.1:{port}", "path": str(path)}))
+    print(
+        json.dumps({"ok": True, "url": f"http://127.0.0.1:{port}", "path": str(path)})
+    )
     return 0
 
 
 def cmd_edit(args) -> int:
     path = Path(args.file).resolve()
     if not path.exists():
-        print(json.dumps({"ok": False, "error": f"file not found: {path}"}), file=sys.stderr)
+        print(
+            json.dumps({"ok": False, "error": f"file not found: {path}"}),
+            file=sys.stderr,
+        )
         return 1
 
     # Build the edits list.
     if args.edits_json:
-        raw = sys.stdin.read() if args.edits_json == "-" else Path(args.edits_json).read_text()
+        raw = (
+            sys.stdin.read()
+            if args.edits_json == "-"
+            else Path(args.edits_json).read_text()
+        )
         try:
             edits = json.loads(raw)
         except ValueError as exc:
-            print(json.dumps({"ok": False, "error": f"invalid edits JSON: {exc}"}), file=sys.stderr)
+            print(
+                json.dumps({"ok": False, "error": f"invalid edits JSON: {exc}"}),
+                file=sys.stderr,
+            )
             return 1
         if not isinstance(edits, list):
-            print(json.dumps({"ok": False, "error": "edits JSON must be a list"}), file=sys.stderr)
+            print(
+                json.dumps({"ok": False, "error": "edits JSON must be a list"}),
+                file=sys.stderr,
+            )
             return 1
     else:
         if args.old is None or args.new is None:
-            print(json.dumps({"ok": False,
-                  "error": "provide --old and --new, or --edits-json"}), file=sys.stderr)
+            print(
+                json.dumps(
+                    {"ok": False, "error": "provide --old and --new, or --edits-json"}
+                ),
+                file=sys.stderr,
+            )
             return 1
-        edits = [{"old": _unescape_cli(args.old),
-                  "new": _unescape_cli(args.new),
-                  "replace_all": args.replace_all}]
+        edits = [
+            {
+                "old": _unescape_cli(args.old),
+                "new": _unescape_cli(args.new),
+                "replace_all": args.replace_all,
+            }
+        ]
 
     port = _ensure_daemon(path, open_browser=not args.no_browser)
     status, data = _request(port, "POST", "/api/edit", {"edits": edits})
@@ -1368,14 +1456,20 @@ def cmd_edit(args) -> int:
 def cmd_review(args) -> int:
     path = Path(args.file).resolve()
     if not path.exists():
-        print(json.dumps({"ok": False, "error": f"file not found: {path}"}), file=sys.stderr)
+        print(
+            json.dumps({"ok": False, "error": f"file not found: {path}"}),
+            file=sys.stderr,
+        )
         return 1
 
     port = _ensure_daemon(path, open_browser=not args.no_browser)
 
     if not args.json:
-        print(f"Review open at http://127.0.0.1:{port} — "
-              f"waiting for you to click “Send to LLM”…", file=sys.stderr)
+        print(
+            f"Review open at http://127.0.0.1:{port} — "
+            f"waiting for you to click “Send to LLM”…",
+            file=sys.stderr,
+        )
 
     # Block until the user clicks Send (or timeout). We poll the server.
     deadline = None if args.timeout <= 0 else time.monotonic() + args.timeout
@@ -1383,8 +1477,7 @@ def cmd_review(args) -> int:
         try:
             status, data = _request(port, "GET", "/api/comments", timeout=5.0)
         except OSError:
-            print(json.dumps({"ok": False, "error": "session ended"}),
-                  file=sys.stderr)
+            print(json.dumps({"ok": False, "error": "session ended"}), file=sys.stderr)
             return 1
         if data.get("submitted"):
             break
@@ -1395,8 +1488,7 @@ def cmd_review(args) -> int:
     try:
         _, payload = _request(port, "GET", "/api/comments", timeout=5.0)
     except OSError:
-        print(json.dumps({"ok": False, "error": "session ended"}),
-              file=sys.stderr)
+        print(json.dumps({"ok": False, "error": "session ended"}), file=sys.stderr)
         return 1
     result = {
         "path": str(path),
@@ -1429,8 +1521,10 @@ def cmd_resolve(args) -> int:
         return 1
 
     if not args.all and not args.id:
-        print(json.dumps({"ok": False,
-              "error": "provide one or more --id, or --all"}), file=sys.stderr)
+        print(
+            json.dumps({"ok": False, "error": "provide one or more --id, or --all"}),
+            file=sys.stderr,
+        )
         return 1
 
     # Determine which ids to resolve.
@@ -1448,12 +1542,17 @@ def cmd_resolve(args) -> int:
         else:
             missing.append(cid)
 
-    print(json.dumps({
-        "ok": not missing,
-        "resolved": resolved,
-        "missing": missing,
-        "url": f"http://127.0.0.1:{port}",
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "ok": not missing,
+                "resolved": resolved,
+                "missing": missing,
+                "url": f"http://127.0.0.1:{port}",
+            },
+            indent=2,
+        )
+    )
     return 0 if not missing else 1
 
 
@@ -1468,8 +1567,7 @@ def cmd_clear_diffs(args) -> int:
     if not port:
         print(json.dumps({"ok": False, "error": "no running session"}), file=sys.stderr)
         return 1
-    _, data = _request(port, "POST", "/api/diffs/clear",
-                       {"keep_current": not args.all})
+    _, data = _request(port, "POST", "/api/diffs/clear", {"keep_current": not args.all})
     data["url"] = f"http://127.0.0.1:{port}"
     print(json.dumps(data, indent=2))
     return 0 if data.get("ok") else 1
@@ -1482,14 +1580,19 @@ def cmd_status(args) -> int:
         print(json.dumps({"running": False, "path": str(path)}))
         return 0
     _, data = _request(port, "GET", "/api/state")
-    print(json.dumps({
-        "running": True,
-        "url": f"http://127.0.0.1:{port}",
-        "version": data.get("version"),
-        "submitted": data.get("submitted"),
-        "edit_count": len(data.get("edits", [])),
-        "comment_count": len(data.get("comments", [])),
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "running": True,
+                "url": f"http://127.0.0.1:{port}",
+                "version": data.get("version"),
+                "submitted": data.get("submitted"),
+                "edit_count": len(data.get("edits", [])),
+                "comment_count": len(data.get("comments", [])),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -1513,10 +1616,15 @@ def cmd_vendor_manifest(args) -> int:
     `update-vendor.sh` consumes this so the list of files/URLs lives in exactly
     one place (VENDOR_ASSETS) rather than being duplicated in the shell script.
     """
-    print(json.dumps({
-        "vendor_dir": str(VENDOR_DIR),
-        "assets": VENDOR_ASSETS,
-    }, indent=2))
+    print(
+        json.dumps(
+            {
+                "vendor_dir": str(VENDOR_DIR),
+                "assets": VENDOR_ASSETS,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
@@ -1524,15 +1632,21 @@ def cmd_vendor_manifest(args) -> int:
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="mdedit.py",
-        description="LLM-driven markdown editing & review tool.")
-    p.add_argument("--no-browser", action="store_true",
-                   help="Do not auto-open a browser tab.")
-    p.add_argument("--idle-timeout", type=float, default=None,
-                   help="Idle shutdown in seconds (default: 300). 0 disables. "
-                        "Overrides MDEDIT_IDLE_TIMEOUT.")
+        prog="mdedit.py", description="LLM-driven markdown editing & review tool."
+    )
+    p.add_argument(
+        "--no-browser", action="store_true", help="Do not auto-open a browser tab."
+    )
+    p.add_argument(
+        "--idle-timeout",
+        type=float,
+        default=None,
+        help="Idle shutdown in seconds (default: 300). 0 disables. "
+        "Overrides MDEDIT_IDLE_TIMEOUT.",
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("open", help="Open or focus the viewer for a document.")
@@ -1544,50 +1658,77 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument(
         "--old",
         help="Text to find (must occur once unless --replace-all). "
-             "Backslash escapes are interpreted (e.g. \\n -> newline).")
+        "Backslash escapes are interpreted (e.g. \\n -> newline).",
+    )
     sp.add_argument(
         "--new",
-        help="Replacement text. Backslash escapes are interpreted (e.g. \\n -> newline).")
-    sp.add_argument("--replace-all", action="store_true",
-                    help="Replace every occurrence of --old.")
-    sp.add_argument("--edits-json", metavar="PATH",
-                    help="Path to a JSON array of {old,new,replace_all} edits, or '-' for stdin.")
+        help="Replacement text. Backslash escapes are interpreted (e.g. \\n -> newline).",
+    )
+    sp.add_argument(
+        "--replace-all", action="store_true", help="Replace every occurrence of --old."
+    )
+    sp.add_argument(
+        "--edits-json",
+        metavar="PATH",
+        help="Path to a JSON array of {old,new,replace_all} edits, or '-' for stdin.",
+    )
     sp.set_defaults(func=cmd_edit)
 
-    sp = sub.add_parser("review", help="Block until the user sends comments; print them as JSON.")
+    sp = sub.add_parser(
+        "review", help="Block until the user sends comments; print them as JSON."
+    )
     sp.add_argument("file")
-    sp.add_argument("--json", action="store_true",
-                    help="Suppress the human-readable stderr notice.")
-    sp.add_argument("--timeout", type=float, default=0,
-                    help="Max seconds to wait (0 = wait forever).")
+    sp.add_argument(
+        "--json", action="store_true", help="Suppress the human-readable stderr notice."
+    )
+    sp.add_argument(
+        "--timeout",
+        type=float,
+        default=0,
+        help="Max seconds to wait (0 = wait forever).",
+    )
     sp.set_defaults(func=cmd_review)
 
-    sp = sub.add_parser("resolve",
-                        help="Resolve (delete) comments the LLM has addressed.")
+    sp = sub.add_parser(
+        "resolve", help="Resolve (delete) comments the LLM has addressed."
+    )
     sp.add_argument("file")
-    sp.add_argument("--id", type=int, action="append", metavar="N",
-                    help="Comment id to resolve (repeatable).")
-    sp.add_argument("--all", action="store_true",
-                    help="Resolve every outstanding comment.")
+    sp.add_argument(
+        "--id",
+        type=int,
+        action="append",
+        metavar="N",
+        help="Comment id to resolve (repeatable).",
+    )
+    sp.add_argument(
+        "--all", action="store_true", help="Resolve every outstanding comment."
+    )
     sp.set_defaults(func=cmd_resolve)
 
     sp = sub.add_parser("status", help="Print the current session state.")
     sp.add_argument("file")
     sp.set_defaults(func=cmd_status)
 
-    sp = sub.add_parser("clear-diffs",
-                        help="Clear the Changes-view diff history (document text is kept).")
+    sp = sub.add_parser(
+        "clear-diffs",
+        help="Clear the Changes-view diff history (document text is kept).",
+    )
     sp.add_argument("file")
-    sp.add_argument("--all", action="store_true",
-                    help="Clear every round, including the current one.")
+    sp.add_argument(
+        "--all",
+        action="store_true",
+        help="Clear every round, including the current one.",
+    )
     sp.set_defaults(func=cmd_clear_diffs)
 
     sp = sub.add_parser("stop", help="Shut the session daemon down.")
     sp.add_argument("file")
     sp.set_defaults(func=cmd_stop)
 
-    sp = sub.add_parser("vendor-manifest",
-                        help="Print the front-end asset manifest as JSON (used by update-vendor.sh).")
+    sp = sub.add_parser(
+        "vendor-manifest",
+        help="Print the front-end asset manifest as JSON (used by update-vendor.sh).",
+    )
     sp.set_defaults(func=cmd_vendor_manifest)
 
     return p
