@@ -8,6 +8,23 @@ name = "agent-skills"
 version = "0"
 requires-python = ">=3.10"
 
+# Dev/test-only tooling. Each skill itself stays pure-stdlib at runtime; these
+# groups are never part of a distributed skill and are only consumed by `uv`
+# (`uv run --group test …`) and CI. `browser` is a superset of `test` (it adds
+# Playwright + Chromium for the headless browser tests), so installing it also
+# runs the plain pytest suite.
+#
+# Use PEP 735 dependency groups rather than `[project.optional-dependencies]`
+# because this is a virtual (non-installable) project: there is no
+# `[build-system]` and nothing to ship. Dependency groups are the right tool
+# for dev-only requirements that aren't tied to a distribution.
+#
+# Versions are kept reproducible via the committed `uv.lock`; the lower bounds
+# below just document the minimum we test against.
+[dependency-groups]
+test = ["pytest>=9"]
+browser = ["pytest>=9", "playwright>=1.40"]
+
 [tool.ruff]
 # The mdedit.py docstring declares a 3.10+ minimum. Each skill's scripts are
 # standalone (no installed package), so we lint by path from the repo root.
@@ -34,3 +51,9 @@ strict = false
 warn_unused_ignores = true
 warn_redundant_casts = true
 files = ["skills/markdown-review/mdedit.py"]
+
+[tool.pytest.ini_options]
+# Discover every skill's tests without naming files in CI. Browser tests use
+# `pytest.importorskip("playwright…")`, so they skip cleanly when only the
+# `test` group is installed and run when the `browser` group is.
+testpaths = ["skills"]

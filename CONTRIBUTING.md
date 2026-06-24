@@ -69,15 +69,25 @@ uvx ruff format --check .
 # Static type-check (mypy, pinned to skills/markdown-review/mdedit.py).
 uvx mypy
 
-# Tests (mdedit.py's tests fork a daemon, so they're Unix-only).
-uv run --python 3.13 --with pytest \
-  python -m pytest skills/markdown-review/test_idle_shutdown.py -v
+# Tests. Dev/test tooling is declared as PEP 735 dependency groups in
+# pyproject.toml and pinned in the committed uv.lock; `uv run --group` builds
+# an ephemeral env from the lock. The skills themselves stay pure-stdlib at
+# runtime — these groups are dev-only.
+#
+# Fast suite (browser tests skip via `pytest.importorskip`):
+uv run --frozen --group test pytest -v
+
+# Browser suite (installs Playwright + Chromium):
+uv run --frozen --group browser python -m playwright install chromium
+uv run --frozen --group browser pytest -v
 ```
 
 A one-liner to run the full local gate:
 
 ```sh
 uvx ruff check . && uvx ruff format --check . && uvx mypy && \
-uv run --python 3.13 --with pytest \
-  python -m pytest skills/markdown-review/test_idle_shutdown.py
+uv run --frozen --group test pytest
 ```
+
+When you add or bump a dev dependency, update `pyproject.toml`'s
+`[dependency-groups]` and re-run `uv lock` to refresh the committed lockfile.

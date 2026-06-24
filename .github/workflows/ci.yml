@@ -54,10 +54,45 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
-      # `uv run --with pytest` builds an ephemeral env with pytest for the given
-      # Python. The tests spawn the real mdedit.py daemon (which os.fork()s),
-      # so they are Unix-only — hence ubuntu-latest.
+      # Run the pure-pytest suite against the matrix. Dependencies come from the
+      # committed uv.lock via the `test` dependency group (PEP 735); `--frozen`
+      # makes CI fail rather than silently re-resolving, so the lock is the
+      # source of truth. The browser tests `importorskip` Playwright, so they
+      # are skipped here and exercised in the dedicated `browser-test` job
+      # below. Test discovery is configured via [tool.pytest.ini_options] in
+      # pyproject.toml (testpaths = ["skills"]).
       - name: Run tests
-        run: >-
-          uv run --python ${{ matrix.python-version }} --with pytest
-          python -m pytest skills/markdown-review/test_idle_shutdown.py -v
+        run: uv run --frozen --python ${{ matrix.python-version }} --group test pytest -v
+
+  browser-test:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    # The headless-Chromium regression tests for inline comment highlighting.
+    # Heavier than the plain pytest job (downloads a browser), so it runs on a
+    # single Python version rather than the full matrix; the highlight code is
+    # pure JS and not Python-version sensitive.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      # Cache the downloaded Chromium binary across runs. Keyed on the
+      # playwright version pinned in uv.lock so a bump invalidates it.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('uv.lock') }}
+          restore-keys: ${{ runner.os }}-playwright-
+
+      # Install the `browser` dependency group (pytest + playwright) from the
+      # lock, then download the Chromium build Playwright drives. `--with-deps`
+      # also installs the system libraries Chromium needs on a bare runner.
+      - name: Install browser
+        run: uv run --frozen --group browser python -m playwright install --with-deps chromium
+
+      - name: Run tests
+        run: uv run --frozen --group browser pytest -v
