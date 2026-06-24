@@ -132,7 +132,8 @@ use the normal edit tools for those.
          "source": "doc",
          "author": "You",
          "stale": false,
-         "round": 0
+         "round": 0,
+         "replies": []
        },
        {
          "id": 2,
@@ -157,6 +158,9 @@ use the normal edit tools for those.
    - `stale` is `true` if the comment's `quote` text no longer exists in the
      current document (the text was edited after the comment was made). Treat
      the context as potentially shifted.
+   - `replies` is a list of threaded replies attached to the comment (each has
+     `body`, `author`, and `ts`). They appear in the browser sidebar under the
+     parent comment and are included when comments are exported/imported.
    - An empty `comments` array with `submitted: true` means the user approved
      with no changes.
    - **Resolve each comment once you have addressed it** so it does not come
@@ -169,6 +173,10 @@ use the normal edit tools for those.
      Use `--all` to clear every outstanding comment at once. Only resolve a
      comment after you have actually applied the edit it asked for — leave any
      comment you are deferring so the user still sees it next round.
+
+   - Users can also **edit** any comment (fix typos, refine wording) and
+     **reply** to imported comments with a threaded note directly in the
+     browser sidebar. Both are UI-only actions — no CLI command is needed.
 
    - Loop: apply edits → resolve addressed comments → `review` again — as many
      rounds as the user wants. Each `review` blocks again until the user clicks

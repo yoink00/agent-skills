@@ -186,6 +186,48 @@ body{
 .comment-card .stale-warn{font-size:0.66rem;color:var(--yellow);font-weight:600;
   background:rgba(247,221,161,0.12);border:1px solid rgba(247,221,161,0.3);
   border-radius:3px;padding:1px 5px;}
+
+/* comment action buttons (edit, reply) */
+.comment-card .actions{display:flex;gap:4px;float:right;}
+.comment-card .act-btn{background:none;border:none;color:var(--bg-500);cursor:pointer;
+  font-size:0.74rem;padding:0 4px;line-height:1.3;border-radius:3px;}
+.comment-card .act-btn:hover{color:var(--bb-300);background:rgba(0,113,240,0.10);}
+
+/* inline edit mode */
+.comment-card .edit-area{width:100%;min-height:50px;resize:vertical;background:var(--bg-900);
+  border:1px solid var(--bg-600);border-radius:5px;color:var(--bg-100);font-size:0.84rem;
+  padding:7px;outline:none;font-family:inherit;margin-bottom:5px;}
+.comment-card .edit-area:focus{border-color:var(--bb-400);}
+.comment-card .edit-actions{display:flex;gap:5px;justify-content:flex-end;}
+.comment-card .edit-actions button{border:none;border-radius:4px;padding:4px 12px;
+  font-size:0.76rem;cursor:pointer;}
+.comment-card .edit-actions .save{background:var(--bb-500);color:#fff;}
+.comment-card .edit-actions .save:hover{background:var(--bb-400);}
+.comment-card .edit-actions .cancel{background:var(--bg-600);color:var(--bg-200);}
+.comment-card .edit-actions .cancel:hover{background:var(--bg-500);}
+
+/* replies */
+.comment-card .replies{margin-top:8px;padding-left:10px;border-left:2px solid var(--bg-700);}
+.comment-card .reply-item{margin-bottom:6px;}
+.comment-card .reply-item:last-child{margin-bottom:0;}
+.comment-card .reply-item .reply-author{font-size:0.72rem;font-weight:600;color:var(--bb-300);
+  margin-right:5px;}
+.comment-card .reply-item .reply-body{font-size:0.8rem;color:var(--bg-200);
+  white-space:pre-wrap;line-height:1.4;}
+
+/* inline reply form */
+.comment-card .reply-form{margin-top:8px;}
+.comment-card .reply-form textarea{width:100%;min-height:38px;resize:vertical;background:var(--bg-900);
+  border:1px solid var(--bg-600);border-radius:5px;color:var(--bg-100);font-size:0.8rem;
+  padding:6px;outline:none;font-family:inherit;margin-bottom:4px;}
+.comment-card .reply-form textarea:focus{border-color:var(--bb-400);}
+.comment-card .reply-form .reply-actions{display:flex;gap:5px;justify-content:flex-end;}
+.comment-card .reply-form .reply-actions button{border:none;border-radius:4px;
+  padding:3px 10px;font-size:0.74rem;cursor:pointer;}
+.comment-card .reply-form .reply-actions .send{background:var(--bb-500);color:#fff;}
+.comment-card .reply-form .reply-actions .send:hover{background:var(--bb-400);}
+.comment-card .reply-form .reply-actions .cancel{background:var(--bg-600);color:var(--bg-200);}
+.comment-card .reply-form .reply-actions .cancel:hover{background:var(--bg-500);}
 #comments-empty{color:var(--bg-500);font-size:0.82rem;text-align:center;padding:24px 12px;line-height:1.6;}
 
 /* selection popover */
@@ -657,10 +699,78 @@ function renderComments(){
     const q=c.quote
       ? `<div class="quote">${escapeHtml(c.quote)}</div>`
       : `<div class="quote empty">general comment</div>`;
-    return `<div class="comment-card"><button class="del" data-id="${c.id}" title="Delete">\u00d7</button>`
-      +`<div class="comment-meta">${authorTag}${staleTag}${tag}</div>${q}<div class="body">${escapeHtml(c.body)}</div></div>`;
+    const replies=(c.replies&&c.replies.length)
+      ? `<div class="replies">${c.replies.map(r=>
+          `<div class="reply-item"><span class="reply-author">${escapeHtml(r.author)}</span>`
+          +`<span class="reply-body">${escapeHtml(r.body)}</span></div>`
+        ).join('')}</div>`
+      : '';
+    return `<div class="comment-card" data-cid="${c.id}">`
+      +`<div class="actions">`
+      +`<button class="act-btn edit-btn" data-id="${c.id}" title="Edit">Edit</button>`
+      +`<button class="act-btn reply-btn" data-id="${c.id}" title="Reply">Reply</button>`
+      +`<button class="del" data-id="${c.id}" title="Delete">\u00d7</button>`
+      +`</div>`
+      +`<div class="comment-meta">${authorTag}${staleTag}${tag}</div>${q}`
+      +`<div class="body">${escapeHtml(c.body)}</div>`
+      +replies
+      +`</div>`;
   }).join('');
   list.querySelectorAll('.del').forEach(b=>b.addEventListener('click',()=>deleteComment(+b.dataset.id)));
+  list.querySelectorAll('.edit-btn').forEach(b=>b.addEventListener('click',()=>showEditForm(+b.dataset.id)));
+  list.querySelectorAll('.reply-btn').forEach(b=>b.addEventListener('click',()=>showReplyForm(+b.dataset.id)));
+}
+
+// ── Inline edit form ─────────────────────────────────────────────────
+function showEditForm(cid){
+  const card=document.querySelector(`.comment-card[data-cid="${cid}"]`);
+  if(!card) return;
+  const c=state.comments.find(x=>x.id===cid);
+  if(!c) return;
+  const bodyEl=card.querySelector('.body');
+  const oldHTML=bodyEl.innerHTML;
+  bodyEl.innerHTML=`<textarea class="edit-area">${escapeHtml(c.body)}</textarea>`
+    +`<div class="edit-actions"><button class="cancel">Cancel</button>`
+    +`<button class="save">Save</button></div>`;
+  const ta=bodyEl.querySelector('.edit-area');
+  ta.focus(); ta.setSelectionRange(ta.value.length,ta.value.length);
+  bodyEl.querySelector('.cancel').addEventListener('click',()=>{bodyEl.innerHTML=oldHTML;});
+  bodyEl.querySelector('.save').addEventListener('click',()=>{
+    const val=ta.value.trim();
+    if(val) editComment(cid,val);
+    else bodyEl.innerHTML=oldHTML;
+  });
+  ta.addEventListener('keydown',(e)=>{
+    if((e.metaKey||e.ctrlKey)&&e.key==='Enter') bodyEl.querySelector('.save').click();
+    if(e.key==='Escape') bodyEl.innerHTML=oldHTML;
+  });
+}
+
+// ── Inline reply form ────────────────────────────────────────────────
+function showReplyForm(cid){
+  const card=document.querySelector(`.comment-card[data-cid="${cid}"]`);
+  if(!card) return;
+  // Remove any existing reply form first.
+  const existing=card.querySelector('.reply-form');
+  if(existing){ existing.remove(); return; }
+  const form=document.createElement('div');
+  form.className='reply-form';
+  form.innerHTML=`<textarea placeholder="Add a reply…"></textarea>`
+    +`<div class="reply-actions"><button class="cancel">Cancel</button>`
+    +`<button class="send">Add reply</button></div>`;
+  card.appendChild(form);
+  const ta=form.querySelector('textarea');
+  ta.focus();
+  form.querySelector('.cancel').addEventListener('click',()=>form.remove());
+  form.querySelector('.send').addEventListener('click',()=>{
+    const val=ta.value.trim();
+    if(val) addReply(cid,val);
+    else form.remove();
+  });
+  ta.addEventListener('keydown',(e)=>{
+    if((e.metaKey||e.ctrlKey)&&e.key==='Enter') form.querySelector('.send').click();
+    if(e.key==='Escape') form.remove();
+  });
 }
 
 // general comment box
@@ -756,6 +866,18 @@ async function deleteComment(id){
   await fetch('/api/comment/delete',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({id})});
   await refresh();
+}
+async function editComment(cid, body){
+  await fetch('/api/comment/edit',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:cid,body})});
+  await refresh();
+  toast('Comment updated');
+}
+async function addReply(cid, body){
+  await fetch('/api/comment/reply',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({comment_id:cid,body})});
+  await refresh();
+  toast('Reply added');
 }
 
 // ── Send to LLM ──────────────────────────────────────────────────────
@@ -960,6 +1082,21 @@ async function deleteComment(id){
   applyDiffCommentHighlights();
 }
 
+async function editComment(cid, body){
+  const c=state.comments.find(x=>x.id===cid);
+  if(c){ c.body=body; renderComments(); toast('Comment updated'); }
+}
+
+async function addReply(cid, body){
+  const c=state.comments.find(x=>x.id===cid);
+  if(c){
+    if(!c.replies) c.replies=[];
+    c.replies.push({id:(c.replies.length||0)+1, body:body, author:authorName||'Anonymous', ts:Date.now()/1000});
+    renderComments();
+    toast('Reply added');
+  }
+}
+
 // ── Export comments ──────────────────────────────
 function buildExportJson(){
   return JSON.stringify({
@@ -972,7 +1109,8 @@ function buildExportJson(){
       context_after:c.context_after,
       source:c.source,
       round:c.round,
-      author:c.author||'Anonymous'
+      author:c.author||'Anonymous',
+      replies:(c.replies||[]).map(r=>({body:r.body,author:r.author||'Anonymous',ts:r.ts||0}))
     }))
   },null,2);
 }

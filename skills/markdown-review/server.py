@@ -197,6 +197,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = self._read_body()
             ok = self.session.delete_comment(int(data.get("id", -1)))
             self._json({"ok": ok})
+        elif path == "/api/comment/edit":
+            data = self._read_body()
+            c = self.session.edit_comment(int(data.get("id", -1)), data.get("body", ""))
+            if c is not None:
+                self._json(c.to_dict())
+            else:
+                self._json({"ok": False, "error": "comment not found"}, 404)
+        elif path == "/api/comment/reply":
+            data = self._read_body()
+            r = self.session.add_reply(
+                int(data.get("comment_id", -1)),
+                data.get("body", ""),
+                data.get("author", "You"),
+            )
+            if r is not None:
+                self._json(r.to_dict())
+            else:
+                self._json({"ok": False, "error": "comment not found"}, 404)
         elif path == "/api/import":
             data = self._read_body()
             # Accept either {"comments": [...]} or a bare [...].

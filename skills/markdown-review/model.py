@@ -40,6 +40,24 @@ class EditRecord:
 
 
 @dataclass
+class Reply:
+    """A reply/note attached to an existing comment (threaded)."""
+
+    id: int
+    body: str
+    author: str = "You"
+    ts: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "body": self.body,
+            "author": self.author,
+            "ts": self.ts,
+        }
+
+
+@dataclass
 class Comment:
     """A user comment, optionally anchored to a text selection or a diff line."""
 
@@ -53,6 +71,7 @@ class Comment:
     author: str = "You"  # who wrote the comment (for multi-reviewer support)
     stale: bool = False  # true if the quote text no longer exists in the doc
     ts: float = field(default_factory=time.time)
+    replies: list[Reply] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -66,6 +85,7 @@ class Comment:
             "author": self.author,
             "stale": self.stale,
             "ts": self.ts,
+            "replies": [r.to_dict() for r in self.replies],
         }
 
 
@@ -222,6 +242,23 @@ class Session:
             self._notify_change()
             return c
 
+    def edit_comment(self, cid: int, body: str) -> Comment | None:
+        """Update the body of an existing comment.
+
+        Returns the updated Comment if found, or None if no comment has
+        ``cid``.
+        """
+        with self._cond:
+            for c in self.comments:
+                if c.id == cid:
+                    c.body = body
+                    self.version += 1
+                    self.last_activity = time.time()
+                    self._cond.notify_all()
+                    self._notify_change()
+                    return c
+            return None
+
     def delete_comment(self, cid: int) -> bool:
         with self._cond:
             n = len(self.comments)
@@ -233,6 +270,29 @@ class Session:
                 self._cond.notify_all()
                 self._notify_change()
             return changed
+
+    def add_reply(
+        self, comment_id: int, body: str, author: str = "You"
+    ) -> Reply | None:
+        """Append a threaded reply to an existing comment.
+
+        Returns the new Reply, or None if no comment has ``comment_id``.
+        """
+        with self._cond:
+            for c in self.comments:
+                if c.id == comment_id:
+                    reply = Reply(
+                        id=len(c.replies) + 1,
+                        body=body,
+                        author=author,
+                    )
+                    c.replies.append(reply)
+                    self.version += 1
+                    self.last_activity = time.time()
+                    self._cond.notify_all()
+                    self._notify_change()
+                    return reply
+            return None
 
     def import_comments(self, comments: list) -> dict:
         """Merge an exported comment list into the session.
@@ -286,6 +346,15 @@ class Session:
                     round=int(raw.get("round", 0) or 0),
                     author=raw.get("author", "Anonymous"),
                     stale=is_stale,
+                    replies=[
+                        Reply(
+                            id=int(r.get("id", i)),
+                            body=r.get("body", ""),
+                            author=r.get("author", "Anonymous"),
+                            ts=float(r.get("ts", 0.0)),
+                        )
+                        for i, r in enumerate(raw.get("replies", []))
+                    ],
                 )
                 self.comments.append(c)
                 if is_stale:
@@ -423,6 +492,15 @@ class Session:
                     author=c.get("author", "You"),
                     stale=bool(c.get("stale", False)),
                     ts=float(c.get("ts", 0.0)),
+                    replies=[
+                        Reply(
+                            id=int(r.get("id", i)),
+                            body=r.get("body", ""),
+                            author=r.get("author", "You"),
+                            ts=float(r.get("ts", 0.0)),
+                        )
+                        for i, r in enumerate(c.get("replies", []))
+                    ],
                 )
                 self.comments.append(comment)
 
