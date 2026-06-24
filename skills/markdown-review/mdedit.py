@@ -609,6 +609,15 @@ body{
 
 /* highlightable selection hint */
 ::selection{background:rgba(0,113,240,.35);}
+
+/* inline highlights for document text that has a comment attached */
+#md-render mark.has-comment{
+  background:linear-gradient(180deg,rgba(0,113,240,.32),rgba(0,113,240,.22));
+  color:inherit;border-radius:3px;padding:0 1px;cursor:help;
+  border-bottom:2px solid rgba(0,113,240,.7);
+}
+#md-render mark.has-comment.flash{animation:cmflash 1.1s ease;}
+@keyframes cmflash{0%{background:rgba(0,113,240,.65);}100%{background:rgba(0,113,240,.22);}}
 """
 
 
@@ -836,10 +845,61 @@ async function clearOldRounds(){{
 function renderDoc(patch){{
   const html=marked.parse(state.current_text||'');
   if(patch && mdRender.childNodes.length){{
+    // Strip any comment-highlight marks first so the block-level diff compares
+    // clean marked HTML against clean marked HTML (otherwise blocks carrying
+    // <mark> wrappers would be flagged as changed and re-flash on every edit).
+    unwrapCommentMarks(mdRender);
     const n=diffAndPatch(mdRender, html);
     if(n>0) toast('↻ document updated ('+n+' block'+(n!==1?'s':'')+')');
   }} else {{
     mdRender.innerHTML=html;
+  }}
+  applyCommentHighlights();
+}}
+
+// Highlight document selections that have a comment attached. Each comment
+// whose source is 'doc' carries a `quote` (the exact selected text); we wrap
+// every occurrence of that text inside the rendered document in a
+// <mark class="has-comment"> so the reader can see at a glance which spans
+// have feedback. Idempotent: it unwraps existing marks before re-applying.
+function unwrapCommentMarks(root){{
+  root.querySelectorAll('mark.has-comment').forEach(m=>{{
+    const p=m.parentNode; while(m.firstChild) p.insertBefore(m.firstChild,m);
+    p.removeChild(m); p.normalize();
+  }});
+}}
+function applyCommentHighlights(){{
+  const root=mdRender;
+  unwrapCommentMarks(root);
+  const quotes=[...new Set(
+    state.comments.filter(c=>c.source==='doc'&&c.quote).map(c=>c.quote)
+  )];
+  if(!quotes.length) return;
+  // Longest quotes first so shorter substrings don't steal their text nodes.
+  quotes.sort((a,b)=>b.length-a.length);
+  const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{{
+    acceptNode(n){{ return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }}
+  }});
+  const textNodes=[]; while(walk.nextNode()) textNodes.push(walk.currentNode);
+  for(const q of quotes){{
+    for(const node of [...textNodes]){{
+      const text=node.nodeValue;
+      let idx=text.indexOf(q);
+      if(idx<0) continue;
+      const frag=document.createDocumentFragment();
+      let last=0;
+      while(idx>=0){{
+        if(idx>last) frag.appendChild(document.createTextNode(text.slice(last,idx)));
+        const mk=document.createElement('mark');
+        mk.className='has-comment';
+        mk.textContent=text.slice(idx,idx+q.length);
+        frag.appendChild(mk);
+        last=idx+q.length;
+        idx=text.indexOf(q,last);
+      }}
+      if(last<text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      node.parentNode.replaceChild(frag,node);
+    }}
   }}
 }}
 
@@ -963,6 +1023,10 @@ async function refresh(){{
   if(firstLoad || docChanged) renderDoc(!firstLoad && docChanged);
   if(firstLoad || verChanged) renderDiff();
   renderComments();
+  // Comment add/delete bumps the version but not the document text; re-apply
+  // highlights so new selections light up (and deleted ones clear) without
+  // re-rendering the document body.
+  applyCommentHighlights();
   document.getElementById('doc-meta').textContent =
     state.edits.length+' edit'+(state.edits.length!==1?'s':'');
 }}
