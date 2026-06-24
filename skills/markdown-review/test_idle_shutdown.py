@@ -20,6 +20,7 @@ MDEDIT = Path(__file__).resolve().parent / "mdedit.py"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _env(state_dir: Path, idle_timeout: str) -> dict[str, str]:
     """Build an environment for a daemon subprocess."""
     env = dict(os.environ)
@@ -48,7 +49,10 @@ def _spawn(state_dir: Path, doc: Path, idle_timeout: str = "2") -> dict:
     env = _env(state_dir, idle_timeout)
     subprocess.run(
         [sys.executable, str(MDEDIT), "--no-browser", "open", str(doc)],
-        check=True, capture_output=True, env=env, timeout=15,
+        check=True,
+        capture_output=True,
+        env=env,
+        timeout=15,
     )
     # Wait for state file to appear.
     for _ in range(50):
@@ -90,6 +94,7 @@ def _http_get(port: int, path: str) -> dict:
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestIdleShutdown:
     """The daemon shuts itself down after MDEDIT_IDLE_TIMEOUT seconds of
     inactivity."""
@@ -104,8 +109,9 @@ class TestIdleShutdown:
         pid = info["pid"]
 
         # Do nothing; daemon should exit within a few seconds.
-        assert _wait_exit(pid, timeout=10), \
+        assert _wait_exit(pid, timeout=10), (
             f"daemon pid {pid} did not exit after idle timeout"
+        )
 
         # State file should be cleaned up.
         time.sleep(0.5)
@@ -135,8 +141,9 @@ class TestIdleShutdown:
             time.sleep(1.0)
 
         # Daemon should still be alive.
-        assert _process_alive(pid), \
+        assert _process_alive(pid), (
             "daemon died despite active polling (keepalive not working)"
+        )
 
         # Clean up.
         try:
@@ -156,8 +163,9 @@ class TestIdleShutdown:
 
         # Wait longer than the default timeout; daemon should still be alive.
         time.sleep(5)
-        assert _process_alive(pid), \
+        assert _process_alive(pid), (
             "daemon died despite idle-timeout=0 (should be disabled)"
+        )
 
         # Clean up.
         try:
@@ -186,13 +194,13 @@ class TestSignalHandling:
         os.kill(pid, signal.SIGTERM)
 
         # Should exit promptly.
-        assert _wait_exit(pid, timeout=5), \
+        assert _wait_exit(pid, timeout=5), (
             f"daemon pid {pid} did not exit after SIGTERM"
+        )
 
         # State file should be cleaned up.
         time.sleep(0.5)
-        assert _state_file(state_dir) is None, \
-            "state file not removed after SIGTERM"
+        assert _state_file(state_dir) is None, "state file not removed after SIGTERM"
 
     def test_sighup_cleans_up(self, tmp_path):
         state_dir = tmp_path / "state"
@@ -207,12 +215,10 @@ class TestSignalHandling:
 
         os.kill(pid, signal.SIGHUP)
 
-        assert _wait_exit(pid, timeout=5), \
-            f"daemon pid {pid} did not exit after SIGHUP"
+        assert _wait_exit(pid, timeout=5), f"daemon pid {pid} did not exit after SIGHUP"
 
         time.sleep(0.5)
-        assert _state_file(state_dir) is None, \
-            "state file not removed after SIGHUP"
+        assert _state_file(state_dir) is None, "state file not removed after SIGHUP"
 
 
 class TestReviewCleanFailure:
@@ -231,9 +237,19 @@ class TestReviewCleanFailure:
         # Start a blocking review in a subprocess.
         env = _env(state_dir, "0")
         proc = subprocess.Popen(
-            [sys.executable, str(MDEDIT), "--no-browser",
-             "review", "--json", str(doc), "--timeout", "0"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+            [
+                sys.executable,
+                str(MDEDIT),
+                "--no-browser",
+                "review",
+                "--json",
+                str(doc),
+                "--timeout",
+                "0",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
         )
 
         # Give it a moment to enter the poll loop.
@@ -247,7 +263,11 @@ class TestReviewCleanFailure:
         stdout, stderr = proc.communicate(timeout=10)
         assert proc.returncode != 0, "review should have failed"
         err = stderr.decode()
-        assert "Traceback" not in err, \
+        assert "Traceback" not in err, (
             f"review produced a traceback instead of clean error:\n{err}"
-        assert "session ended" in err.lower() or "session ended" in stdout.decode().lower(), \
+        )
+        assert (
+            "session ended" in err.lower() or "session ended" in stdout.decode().lower()
+        ), (
             f"expected 'session ended' error, got stderr={err!r} stdout={stdout.decode()!r}"
+        )

@@ -50,3 +50,34 @@ feat(mdedit)!: rename --idle-timeout to --shutdown-after
 
 BREAKING CHANGE: --idle-timeout is renamed to --shutdown-after.
 ```
+
+## Static checks & tests
+
+CI (`.github/workflows/ci.yml`) runs the same checks you should run locally
+before pushing. All of them are zero-config — settings live in
+`pyproject.toml` (`[tool.ruff]`, `[tool.mypy]`) — and `uvx`/`uv run` pull in
+the tools on demand, so there's nothing to install.
+
+```sh
+# Lint (ruff's curated defaults + I/UP/B).
+uvx ruff check .
+
+# Format check. To apply fixes instead of just checking, drop `--check`.
+uvx ruff format --check .
+# uvx ruff format .          # apply
+
+# Static type-check (mypy, pinned to skills/markdown-review/mdedit.py).
+uvx mypy
+
+# Tests (mdedit.py's tests fork a daemon, so they're Unix-only).
+uv run --python 3.13 --with pytest \
+  python -m pytest skills/markdown-review/test_idle_shutdown.py -v
+```
+
+A one-liner to run the full local gate:
+
+```sh
+uvx ruff check . && uvx ruff format --check . && uvx mypy && \
+uv run --python 3.13 --with pytest \
+  python -m pytest skills/markdown-review/test_idle_shutdown.py
+```

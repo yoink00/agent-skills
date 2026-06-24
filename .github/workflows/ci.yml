@@ -23,8 +23,12 @@ jobs:
           enable-cache: true
 
       # Ruff (linter) — config in pyproject.toml ([tool.ruff]).
-      - name: Ruff
+      - name: Ruff (lint)
         run: uvx ruff check .
+
+      # Ruff (formatter) — config in pyproject.toml ([tool.ruff]).
+      - name: Ruff (format)
+        run: uvx ruff format --check .
 
       # Mypy (static type-check) — config in pyproject.toml ([tool.mypy]); it
       # pins the files to check (skills/markdown-review/mdedit.py).
