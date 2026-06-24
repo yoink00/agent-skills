@@ -27,6 +27,12 @@ npx skills add yoink00/agent-skills --skill markdown-review
 
 Each skill folder has its own `README.md` and `SKILL.md` with full details.
 
+## Contributing
+
+See [**CONTRIBUTING.md**](./CONTRIBUTING.md) — in short, commit messages and
+PR titles follow [Conventional Commits](https://www.conventionalcommits.org/)
+(`type(scope): subject`, e.g. `feat(mdedit): ...`).
+
 ## Repository layout
 
 This is a **multi-skill** repo. Each skill is self-contained in a folder under

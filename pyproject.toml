@@ -1,0 +1,36 @@
+# This file holds only tool configuration (no packaging): it lets `ruff`,
+# `mypy`, and `uv` pick up settings from the repo root, and declares the
+# supported Python range so the test matrix floor is explicit. There is no
+# [build-system]; uv treats this as a virtual (non-installable) project.
+
+[project]
+name = "agent-skills"
+version = "0"
+requires-python = ">=3.10"
+
+[tool.ruff]
+# The mdedit.py docstring declares a 3.10+ minimum. Each skill's scripts are
+# standalone (no installed package), so we lint by path from the repo root.
+target-version = "py310"
+extend-exclude = [".venv", "vendor"]
+
+[tool.ruff.lint]
+# Start from ruff's curated defaults (E4, E7, E9, F). E501 / line-length is
+# intentionally omitted: that's the formatter's job (`ruff format`), and
+# mdedit.py embeds long HTML/CSS/JS string literals that can't be wrapped.
+# Add import sorting, modern pyupgrade rewrites, and bugbear checks.
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+# NOTE: `ruff format --check` is intentionally NOT enforced yet. The existing
+# mdedit.py predates a formatter and would need a large, mechanical reformat
+# (dict style, comment alignment, blank lines). Run `ruff format` locally and
+# enforce it in CI once that reformat lands.
+
+[tool.mypy]
+python_version = "3.10"
+# The scripts under skills/ are standalone CLI tools with no third-party deps,
+# so keep type-checking pragmatic rather than strict.
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+files = ["skills/markdown-review/mdedit.py"]
