@@ -214,6 +214,10 @@ file — a self-contained copy of the document with the full commenting UI but
 and clicks **Export comments** to download a JSON file. You then import those
 comments back into the live session.
 
+There is also a **Download** button (top bar) that saves the document's current
+markdown source as a plain `.md` file — useful when you just want to send the
+raw file to a reviewer rather than a shareable HTML copy.
+
 This is useful when a colleague can't connect to your local server (different
 machine, offline, etc.) or when you want to collect feedback from multiple
 people in parallel.

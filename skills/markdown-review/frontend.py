@@ -121,12 +121,12 @@ body{
 #send-btn:hover{background:var(--bb-400);}
 #send-btn:disabled{background:var(--bg-700);color:var(--bg-500);cursor:default;}
 
-#share-btn{
+#share-btn,#download-btn{
   background:var(--bg-700);border:1px solid var(--bg-600);color:var(--bg-200);
   padding:6px 14px;border-radius:6px;font-size:0.78rem;font-weight:500;
   cursor:pointer;transition:background .12s,border-color .12s;
 }
-#share-btn:hover{background:var(--bg-600);color:var(--bg-100);border-color:var(--bb-500);}
+#share-btn:hover,#download-btn:hover{background:var(--bg-600);color:var(--bg-100);border-color:var(--bb-500);}
 
 /* layout */
 #body{flex:1;display:flex;overflow:hidden;}
@@ -963,6 +963,19 @@ document.getElementById('share-btn').addEventListener('click', async()=>{
   }catch(_){ toast('Failed to generate share file'); }
 });
 
+// ── Download raw markdown ───────────────────────────────────────────
+document.getElementById('download-btn').addEventListener('click',()=>{
+  const text=state.current_text||'';
+  const blob=new Blob([text],{type:'text/markdown'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=DOC_NAME;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Downloaded '+DOC_NAME,'ok');
+});
+
 // ── Import comments (from a reviewer's exported JSON) ────────────
 // The live viewer is where a colleague's exported comments come back: the
 // JSON is POSTed to /api/import, which dedupes and flags stale quotes
@@ -1155,6 +1168,19 @@ async function addReply(cid, body){
   }
 }
 
+// ── Download raw markdown ───────────────────────────────────────────
+document.getElementById('download-btn').addEventListener('click',()=>{
+  const text=state.current_text||'';
+  const blob=new Blob([text],{type:'text/markdown'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=DOC_NAME;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Downloaded '+DOC_NAME,'ok');
+});
+
 // ── Export comments ──────────────────────────────
 function buildExportJson(){
   return JSON.stringify({
@@ -1270,6 +1296,7 @@ def build_html(name: str) -> str:
     <button id="view-rendered" class="active">Rendered</button>
     <button id="view-diff">Changes</button>
   </div>
+  <button id="download-btn" title="Download the raw markdown source">Download</button>
   <button id="share-btn" title="Download a standalone HTML copy for offline review">Share</button>
   <div id="import-wrap">
     <button id="import-btn" title="Import comments exported by a reviewer">Import ▾</button>
@@ -1379,12 +1406,14 @@ def build_share_html(snapshot: dict) -> str:
     <button id="view-rendered" class="active">Rendered</button>
     <button id="view-diff">Changes</button>
   </div>
+  <button id="download-btn" title="Download the raw markdown source">Download</button>
   <button id="send-btn" title="Show your comments as JSON to copy or download">Export comments</button>
 </div>
 
 <div id="share-banner">
   <strong>Review-only copy.</strong> Your comments are not sent live —
-  click <strong>Export comments</strong> when done and send the file back.
+  click <strong>Export comments</strong> when done and send them back to
+  whoever shared this document with you (copy the JSON or download a file).
 </div>
 
 <div id="body">
