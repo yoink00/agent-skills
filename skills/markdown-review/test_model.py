@@ -329,6 +329,114 @@ class TestComments:
         assert session.comments[0].stale is True
         assert session.comments[0].id in summary["stale_ids"]
 
+    def test_edit_comment_updates_body(self, session):
+        c = session.add_comment("original")
+        updated = session.edit_comment(c.id, "revised")
+        assert updated is not None
+        assert updated.body == "revised"
+        assert session.comments[0].body == "revised"
+
+    def test_edit_comment_missing_returns_none(self, session):
+        session.add_comment("x")
+        assert session.edit_comment(999, "new") is None
+
+    def test_edit_comment_bumps_version(self, session):
+        c = session.add_comment("x")
+        v = session.version
+        session.edit_comment(c.id, "y")
+        assert session.version == v + 1
+
+    def test_edit_comment_notifies_change(self, session):
+        calls = []
+        session.on_change = lambda: calls.append(1)
+        c = session.add_comment("x")
+        calls.clear()  # reset after add
+        session.edit_comment(c.id, "y")
+        assert len(calls) == 1
+
+
+class TestReplies:
+    def test_add_reply_to_comment(self, session):
+        c = session.add_comment("original")
+        r = session.add_reply(c.id, "a note", author="Alice")
+        assert r is not None
+        assert r.body == "a note"
+        assert r.author == "Alice"
+        assert r.id == 1
+        assert len(session.comments[0].replies) == 1
+
+    def test_add_reply_default_author(self, session):
+        c = session.add_comment("x")
+        r = session.add_reply(c.id, "note")
+        assert r.author == "You"
+
+    def test_add_reply_missing_comment_returns_none(self, session):
+        assert session.add_reply(999, "note") is None
+
+    def test_add_reply_increments_reply_id(self, session):
+        c = session.add_comment("x")
+        r1 = session.add_reply(c.id, "first")
+        r2 = session.add_reply(c.id, "second")
+        assert r1.id == 1
+        assert r2.id == 2
+
+    def test_add_reply_bumps_version(self, session):
+        c = session.add_comment("x")
+        v = session.version
+        session.add_reply(c.id, "note")
+        assert session.version == v + 1
+
+    def test_add_reply_notifies_change(self, session):
+        calls = []
+        session.on_change = lambda: calls.append(1)
+        c = session.add_comment("x")
+        calls.clear()
+        session.add_reply(c.id, "note")
+        assert len(calls) == 1
+
+    def test_reply_serialized_in_snapshot(self, session):
+        c = session.add_comment("x", quote="Hello")
+        session.add_reply(c.id, "reply body", author="Bob")
+        snap = session.snapshot()
+        comment_dict = snap["comments"][0]
+        assert len(comment_dict["replies"]) == 1
+        assert comment_dict["replies"][0]["body"] == "reply body"
+        assert comment_dict["replies"][0]["author"] == "Bob"
+
+    def test_restore_round_trip_with_replies(self, tmp_path):
+        """snapshot → restore → re-snapshot preserves replies."""
+        doc = tmp_path / "doc.md"
+        doc.write_text("# Hello world\n")
+        s1 = Session(doc)
+        c = s1.add_comment("original", quote="Hello")
+        s1.add_reply(c.id, "reply 1", author="Alice")
+        s1.add_reply(c.id, "reply 2", author="Bob")
+        snap1 = s1.snapshot()
+
+        s2 = Session(doc)
+        s2.restore(snap1)
+        snap2 = s2.snapshot()
+
+        assert snap2["comments"][0]["replies"] == snap1["comments"][0]["replies"]
+
+    def test_import_comments_carries_replies(self, session):
+        summary = session.import_comments(
+            [
+                {
+                    "body": "main",
+                    "quote": "",
+                    "author": "Alice",
+                    "replies": [
+                        {"body": "reply text", "author": "Bob"},
+                    ],
+                }
+            ]
+        )
+        assert summary["imported"] == 1
+        assert len(session.comments[0].replies) == 1
+        assert session.comments[0].replies[0].body == "reply text"
+        assert session.comments[0].replies[0].author == "Bob"
+
 
 # ---------------------------------------------------------------------------
 # submit / reset lifecycle

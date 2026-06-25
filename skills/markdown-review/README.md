@@ -18,6 +18,10 @@ split into focused modules alongside it: `model.py` (session state),
   view, with diffs grouped into review **rounds**.
 - Lets you select text — in either view — and attach a comment. Comments come
   back to the agent as structured JSON.
+- **Edit** any comment after it's been added — fix a typo, refine wording, or
+  add to it without losing the original anchoring.
+- **Reply** to a colleague's imported comment with a threaded note — useful for
+  noting agreement, adding context, or tracking a decision inline.
 - Re-blocks each review round so the agent waits for fresh feedback rather than
   re-reading stale comments.
 - **Share for offline review** — download a standalone HTML copy of the
