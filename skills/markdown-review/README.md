@@ -31,13 +31,49 @@ split into focused modules alongside it: `model.py` (session state),
 - **Download raw markdown** — grab the document's current markdown source as a
   file straight from the viewer (handy for sending the file to a reviewer).
 
-## Requirements
+## Installation
 
-- **Python 3.10+** (standard library only — nothing to install).
-- **POSIX** host (uses `fork`; on Windows use WSL).
+This skill is part of the [`yoink00/agent-skills`](https://skills.sh/yoink00/agent-skills)
+collection. Install just this skill with the `skills` CLI:
+
+```bash
+npx skills add yoink00/agent-skills --skill markdown-review
+```
+
+Install every skill in the repo (if you want more than one):
+
+```bash
+npx skills add yoink00/agent-skills
+```
+
+### Prerequisites
+
+- **Node.js** — only needed to run `npx skills` for the one-time install. The
+  skill itself is pure Python; Node is not required to use it.
+- **Python 3.10+** (standard library only — nothing to `pip install`).
+- **POSIX** host (the daemon uses `fork`; on Windows use WSL).
 - **Browser libraries from CDN** — the viewer's `marked`, `highlight.js`,
   KaTeX, and Mermaid are loaded from CDN, so reviewing requires an internet
   connection.
+
+### Where it installs
+
+The skill lands in your agent's skill directory — the exact path depends on
+the harness you use (for example `~/.pi/agent/skills/`, `.claude/skills/`,
+or `~/.config/opencode/skills/`). The bundled `mdedit.py` resolves its own
+location at runtime, so it works wherever the skill was installed.
+
+Verify an install with:
+
+```bash
+npx skills list
+```
+
+Or check that the skill directory exists, e.g.:
+
+```bash
+ls ~/.pi/agent/skills/markdown-review/SKILL.md
+```
 
 ## Usage
 
