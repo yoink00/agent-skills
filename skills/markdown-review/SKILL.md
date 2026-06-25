@@ -27,16 +27,15 @@ opens a browser viewer that:
   `pip install`. It runs with the system `python3`.
 - **POSIX only** — the daemon backgrounds itself with `fork`, so it does not run
   on native Windows (use WSL there).
-- **Works offline** — the browser viewer's two JS libraries (`marked` and
-  `highlight.js`) are vendored under `vendor/` and served by the daemon, so no
-  network is needed. If `vendor/` is absent the HTML falls back to a CDN. To
-  refresh or re-pin the vendored libraries, run `./update-vendor.sh` (versions
-  are defined by `VENDOR_ASSETS` in `mdedit.py`).
+- **Browser libraries from CDN** — the viewer renders markdown, code, math, and
+  diagrams using JS libraries (`marked`, `highlight.js`, [KaTeX](https://katex.org),
+  [Mermaid](https://mermaid.js.org)) loaded from CDN, so an internet connection
+  is required while reviewing.
 - **LaTeX math and Mermaid diagrams** — the viewer renders inline math
   (`$E=mc^2$`), display math (`$$...$$`), and ``` ```mermaid ``` ``` diagram
   code fences. These features load [KaTeX](https://katex.org) and
   [Mermaid](https://mermaid.js.org) from CDN, so they require an internet
-  connection (unlike the core vendored libraries).
+  connection.
 
 ## Locating the script
 

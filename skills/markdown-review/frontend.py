@@ -1,39 +1,34 @@
-"""Browser front-end for mdedit: vendored asset config plus the single-page
+"""Browser front-end for mdedit: CDN asset config plus the single-page
 HTML/CSS/JS viewer.
 
-The viewer is a static HTML page rendered by :func:`build_html`. It loads two
-vendored JS/CSS libraries (marked, highlight.js) so it works fully offline; if
-a vendored file is absent the page falls back to its CDN URL. The manifest
-(``VENDOR_ASSETS``) is the single source of truth consumed by
-``mdedit.py vendor-manifest`` and ``update-vendor.sh``.
+The viewer is a static HTML page rendered by :func:`build_html`. It loads its
+rendering libraries (marked, highlight.js, KaTeX, Mermaid) from CDN — the tool
+is used during LLM-driven iteration sessions that are inherently online.
 
 :func:`build_share_html` produces a self-contained standalone HTML page for
-offline review — the document snapshot and JS libraries are inlined so the
-page works with no server. Comments are exported as a downloadable JSON file
-and re-imported via ``mdedit.py import-comments``.
+offline review — the document snapshot is inlined so the page works with no
+server. Comments are exported as a downloadable JSON file and re-imported via
+``mdedit.py import-comments``.
 
-This module is pure (no I/O beyond stat-ing/reading the vendor dir) so the
-asset fallback logic and HTML shape are unit-testable directly.
+This module is pure (no I/O) so the HTML shape is unit-testable directly.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
-# Front-end libraries. These are loaded by the browser viewer to render markdown
-# (marked) and syntax-highlight code (highlight.js). They are vendored next to
-# this script under vendor/ so the viewer works fully offline; if a vendored
-# file is missing we fall back to the CDN URL. `update-vendor.sh` (re)downloads
-# the pinned versions below into vendor/. Keep this manifest in sync with that
-# script — it is the single source of truth for versions, filenames and URLs.
-VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
+# Front-end rendering libraries, loaded from CDN by both the live viewer and
+# the standalone share page. The tool is used during LLM-driven iteration
+# sessions that are inherently online, so a CDN dependency for these rendering
+# libraries (marked, highlight.js) is acceptable — the same model used for
+# KaTeX and Mermaid below.
+MARKED_JS = "https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"
+HIGHLIGHT_JS = (
+    "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js"
+)
+HIGHLIGHT_CSS = "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/base16/onedark.min.css"
 
-# CDN-only libraries (not vendored). These are loaded from CDN in both the
-# live viewer and the standalone share page. The tool is used during LLM-
-# driven iteration sessions that are inherently online, so a CDN dependency
-# for these rendering libraries is acceptable.
-#
+# Other CDN-only rendering libraries.
 # KaTeX: math/LaTeX rendering. Mermaid: diagram rendering.
 KATEX_CSS = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css"
 KATEX_JS = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.js"
@@ -42,45 +37,13 @@ KATEX_AUTORENDER_JS = (
 )
 MERMAID_JS = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
 
-# local filename -> CDN URL (used as fallback and by update-vendor.sh)
-VENDOR_ASSETS = {
-    "marked.min.js": "https://cdn.jsdelivr.net/npm/marked@12/marked.min.js",
-    "highlight.min.js": "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js",
-    "highlight-onedark.min.css": "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/base16/onedark.min.css",
+# All CDN library URLs (filename -> URL). Kept as a single map so tests and
+# callers can iterate the full asset set.
+CDN_ASSETS = {
+    "marked.min.js": MARKED_JS,
+    "highlight.min.js": HIGHLIGHT_JS,
+    "highlight-onedark.min.css": HIGHLIGHT_CSS,
 }
-
-# Browser MIME types for the vendored assets we serve.
-_VENDOR_MIME = {
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-}
-
-
-def _asset_url(filename: str) -> str:
-    """Local /vendor URL if the file is vendored, else the CDN fallback URL."""
-    if (VENDOR_DIR / filename).is_file():
-        return f"/vendor/{filename}"
-    return VENDOR_ASSETS[filename]
-
-
-def _inline_or_url(filename: str, tag: str) -> str:
-    """Return an HTML element that either inlines a vendored asset or links
-    to its CDN fallback URL.
-
-    Used by the standalone share page so it works offline: if the JS/CSS
-    library is vendored under ``vendor/`` its contents are inlined directly
-    into the HTML; otherwise the CDN ``<script src>`` / ``<link>`` is emitted.
-    """
-    path = VENDOR_DIR / filename
-    if path.is_file():
-        content = path.read_text(encoding="utf-8")
-        if tag == "script":
-            return f"<script>\n{content}\n</script>"
-        return f"<style>\n{content}\n</style>"
-    url = VENDOR_ASSETS[filename]
-    if tag == "script":
-        return f'<script src="{url}"></script>'
-    return f'<link rel="stylesheet" href="{url}">'
 
 
 # Characters that must be neutralised when a JSON value is interpolated into a
@@ -1288,10 +1251,10 @@ def build_html(name: str) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{safe_name} — mdedit</title>
-<link rel="stylesheet" href="{_asset_url("highlight-onedark.min.css")}">
+<link rel="stylesheet" href="{HIGHLIGHT_CSS}">
 <link rel="stylesheet" href="{KATEX_CSS}">
-<script src="{_asset_url("highlight.min.js")}"></script>
-<script src="{_asset_url("marked.min.js")}"></script>
+<script src="{HIGHLIGHT_JS}"></script>
+<script src="{MARKED_JS}"></script>
 <script src="{KATEX_JS}"></script>
 <script src="{KATEX_AUTORENDER_JS}"></script>
 <script src="{MERMAID_JS}"></script>
@@ -1388,10 +1351,10 @@ def build_share_html(snapshot: dict) -> str:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{safe_name} — review (shared)</title>
-{_inline_or_url("highlight-onedark.min.css", "style")}
+<link rel="stylesheet" href="{HIGHLIGHT_CSS}">
 <link rel="stylesheet" href="{KATEX_CSS}">
-{_inline_or_url("highlight.min.js", "script")}
-{_inline_or_url("marked.min.js", "script")}
+<script src="{HIGHLIGHT_JS}"></script>
+<script src="{MARKED_JS}"></script>
 <script src="{KATEX_JS}"></script>
 <script src="{KATEX_AUTORENDER_JS}"></script>
 <script src="{MERMAID_JS}"></script>

@@ -6,8 +6,8 @@ One daemon serves one document, keyed by absolute path. The first CLI command
 for a document auto-spawns the daemon (forked, detached); later CLI clients
 discover it via a state file under ``STATE_DIR`` and talk to it over localhost.
 
-Pure standard library. Depends on the session model (``model.Session``) and the
-front-end (``frontend.build_html`` plus the vendored-asset config).
+Pure standard library. Depends on the session model (``model.Session``) and
+the front-end (``frontend.build_html``).
 """
 
 from __future__ import annotations
@@ -25,13 +25,7 @@ import webbrowser
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from frontend import (
-    _VENDOR_MIME,
-    VENDOR_ASSETS,
-    VENDOR_DIR,
-    build_html,
-    build_share_html,
-)
+from frontend import build_html, build_share_html
 from model import Session
 
 DEFAULT_PORT = 7575
@@ -78,33 +72,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return {}
 
-    def _serve_vendor(self, filename: str):
-        """Serve a vendored front-end asset from VENDOR_DIR.
-
-        Guards against path traversal and only serves files declared in
-        VENDOR_ASSETS, so the daemon never exposes arbitrary local files.
-        """
-        if filename not in VENDOR_ASSETS:
-            self._json({"error": "unknown asset"}, 404)
-            return
-        target = (VENDOR_DIR / filename).resolve()
-        # Defence in depth: ensure the resolved path stays inside VENDOR_DIR.
-        if VENDOR_DIR.resolve() not in target.parents or not target.is_file():
-            self._json({"error": "not found"}, 404)
-            return
-        try:
-            data = target.read_bytes()
-        except OSError:
-            self._json({"error": "not found"}, 404)
-            return
-        ctype = _VENDOR_MIME.get(target.suffix, "application/octet-stream")
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "max-age=86400")
-        self.end_headers()
-        self.wfile.write(data)
-
     # -- routing ------------------------------------------------------------
 
     def do_GET(self):
@@ -141,8 +108,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(html)
-        elif path.startswith("/vendor/"):
-            self._serve_vendor(path[len("/vendor/") :])
         else:
             self._json({"error": "not found"}, 404)
 
