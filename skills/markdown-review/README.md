@@ -33,9 +33,9 @@ split into focused modules alongside it: `model.py` (session state),
 
 - **Python 3.10+** (standard library only — nothing to install).
 - **POSIX** host (uses `fork`; on Windows use WSL).
-- **Works offline** — the viewer's `marked` and `highlight.js` are vendored
-  under `vendor/` and served locally. Run `./update-vendor.sh` to refresh or
-  re-pin them; if `vendor/` is missing the page falls back to a CDN.
+- **Browser libraries from CDN** — the viewer's `marked`, `highlight.js`,
+  KaTeX, and Mermaid are loaded from CDN, so reviewing requires an internet
+  connection.
 
 ## Usage
 

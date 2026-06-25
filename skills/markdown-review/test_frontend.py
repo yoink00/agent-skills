@@ -1,7 +1,7 @@
 """Unit tests for the mdedit front-end module (frontend.py).
 
-Covers the vendored-asset fallback resolution and the shape/safety of the
-single-page HTML produced by build_html — both pure and fast, no daemon.
+Covers the CDN asset config and the shape/safety of the single-page HTML
+produced by build_html — both pure and fast, no daemon.
 """
 
 import sys
@@ -21,44 +21,17 @@ from frontend import _script_json  # noqa: E402
 
 
 class TestManifest:
-    def test_all_assets_have_known_mime(self):
-        for fname in frontend.VENDOR_ASSETS:
-            assert frontend.Path(fname).suffix in frontend._VENDOR_MIME, fname
-
     def test_all_urls_are_https(self):
-        for fname, url in frontend.VENDOR_ASSETS.items():
+        for fname, url in frontend.CDN_ASSETS.items():
             assert url.startswith("https://"), (fname, url)
 
     def test_expected_assets_present(self):
-        # build_html hard-codes references to these three; guard against drift.
+        # build_html / build_share_html hard-code references to these three.
         assert {
             "marked.min.js",
             "highlight.min.js",
             "highlight-onedark.min.css",
-        } <= set(frontend.VENDOR_ASSETS)
-
-
-# ---------------------------------------------------------------------------
-# _asset_url fallback
-# ---------------------------------------------------------------------------
-
-
-class TestAssetUrl:
-    def test_local_path_when_vendored(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        (tmp_path / "marked.min.js").write_text("x")
-        assert frontend._asset_url("marked.min.js") == "/vendor/marked.min.js"
-
-    def test_cdn_fallback_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        url = frontend._asset_url("marked.min.js")
-        assert url == frontend.VENDOR_ASSETS["marked.min.js"]
-        assert url.startswith("https://")
-
-    def test_unknown_asset_raises(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        with pytest.raises(KeyError):
-            frontend._asset_url("does-not-exist.js")
+        } <= set(frontend.CDN_ASSETS)
 
 
 # ---------------------------------------------------------------------------
@@ -150,9 +123,9 @@ class TestBuildHtml:
     def test_embeds_css_and_asset_urls(self):
         html = frontend.build_html("x.md")
         assert frontend.VALSTRO_CSS.strip()[:60] in html
-        # All three assets are referenced (local or CDN depending on vendor/).
-        for fname in frontend.VENDOR_ASSETS:
-            assert fname in html
+        # All three assets are referenced from CDN.
+        for url in frontend.CDN_ASSETS.values():
+            assert url in html
 
     def test_contains_key_ui_anchors(self):
         # Guard the IDs the JS hooks onto; renaming one silently breaks the UI.
@@ -298,41 +271,12 @@ class TestBuildShareHtml:
         ):
             assert anchor in html, anchor
 
-    def test_inlines_vendored_assets_when_available(self, tmp_path, monkeypatch):
-        """When vendor files exist they are inlined as <script>/<style> blocks."""
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        (tmp_path / "marked.min.js").write_text("// marked inlined")
-        (tmp_path / "highlight.min.js").write_text("// hljs inlined")
-        (tmp_path / "highlight-onedark.min.css").write_text("/* css inlined */")
+    def test_references_cdn_assets(self):
+        """All front-end assets are loaded from CDN as <script src>/<link>."""
         html = frontend.build_share_html(self._snapshot())
-        assert "// marked inlined" in html
-        assert "// hljs inlined" in html
-        assert "/* css inlined */" in html
-
-    def test_uses_cdn_urls_when_vendor_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        html = frontend.build_share_html(self._snapshot())
-        assert frontend.VENDOR_ASSETS["marked.min.js"] in html
-
-
-class TestInlineOrUrl:
-    def test_inlines_script_when_vendored(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        (tmp_path / "test.js").write_text("var x=1;")
-        result = frontend._inline_or_url("test.js", "script")
-        assert "<script>" in result and "var x=1;" in result
-
-    def test_inlines_style_when_vendored(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        (tmp_path / "test.css").write_text("body{color:red}")
-        result = frontend._inline_or_url("test.css", "style")
-        assert "<style>" in result and "color:red" in result
-
-    def test_cdn_url_when_not_vendored(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(frontend, "VENDOR_DIR", tmp_path)
-        result = frontend._inline_or_url("marked.min.js", "script")
-        assert frontend.VENDOR_ASSETS["marked.min.js"] in result
-        assert "<script src=" in result
+        assert frontend.CDN_ASSETS["highlight-onedark.min.css"] in html
+        assert frontend.CDN_ASSETS["highlight.min.js"] in html
+        assert frontend.CDN_ASSETS["marked.min.js"] in html
 
 
 # ---------------------------------------------------------------------------

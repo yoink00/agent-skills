@@ -55,10 +55,8 @@ document (unless --replace-all). This is intentionally the same contract as a
 typical LLM "edit file" tool, so it slots straight into a harness.
 
 No third-party Python dependencies — 3.10+ standard library only. Markdown,
-syntax highlighting and diff rendering happen client-side via two JS libraries
-(marked, highlight.js). These are vendored under vendor/ and served by the
-daemon so the viewer works offline; if a vendored file is missing the HTML falls
-back to the CDN. Run update-vendor.sh to (re)download the pinned versions.
+syntax highlighting and diff rendering happen client-side via JS libraries
+(marked, highlight.js, KaTeX, Mermaid) loaded from CDN.
 """
 
 from __future__ import annotations
@@ -75,9 +73,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 from cliutil import unescape_cli as _unescape_cli
 
-# cmd_vendor_manifest reports the vendored-asset manifest (the single source
-# of truth lives in frontend.py and is also read by update-vendor.sh).
-from frontend import VENDOR_ASSETS, VENDOR_DIR, build_share_html
+from frontend import build_share_html
 
 # The HTTP daemon and session registry live in server.py; the CLI commands
 # below are thin clients that talk to it over localhost.
@@ -504,24 +500,6 @@ def cmd_import_comments(args) -> int:
     return 0
 
 
-def cmd_vendor_manifest(args) -> int:
-    """Print the front-end asset manifest as JSON.
-
-    `update-vendor.sh` consumes this so the list of files/URLs lives in exactly
-    one place (VENDOR_ASSETS) rather than being duplicated in the shell script.
-    """
-    print(
-        json.dumps(
-            {
-                "vendor_dir": str(VENDOR_DIR),
-                "assets": VENDOR_ASSETS,
-            },
-            indent=2,
-        )
-    )
-    return 0
-
-
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -660,12 +638,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to comment JSON file, or '-' for stdin.",
     )
     sp.set_defaults(func=cmd_import_comments)
-
-    sp = sub.add_parser(
-        "vendor-manifest",
-        help="Print the front-end asset manifest as JSON (used by update-vendor.sh).",
-    )
-    sp.set_defaults(func=cmd_vendor_manifest)
 
     return p
 
