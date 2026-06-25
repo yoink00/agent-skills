@@ -6,8 +6,6 @@ produced by build_html — both pure and fast, no daemon.
 
 import sys
 
-import pytest
-
 SKILL_DIR = "skills/markdown-review"
 if SKILL_DIR not in sys.path:
     sys.path.insert(0, SKILL_DIR)

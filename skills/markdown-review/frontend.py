@@ -23,7 +23,9 @@ import json
 # libraries (marked, highlight.js) is acceptable — the same model used for
 # KaTeX and Mermaid below.
 MARKED_JS = "https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"
-HIGHLIGHT_JS = "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js"
+HIGHLIGHT_JS = (
+    "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/highlight.min.js"
+)
 HIGHLIGHT_CSS = "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11/styles/base16/onedark.min.css"
 
 # Other CDN-only rendering libraries.

@@ -72,7 +72,6 @@ from pathlib import Path
 # CLI sub-commands
 # ---------------------------------------------------------------------------
 from cliutil import unescape_cli as _unescape_cli
-
 from frontend import build_share_html
 
 # The HTTP daemon and session registry live in server.py; the CLI commands
