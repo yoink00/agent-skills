@@ -333,3 +333,134 @@ class TestInlineOrUrl:
         result = frontend._inline_or_url("marked.min.js", "script")
         assert frontend.VENDOR_ASSETS["marked.min.js"] in result
         assert "<script src=" in result
+
+
+# ---------------------------------------------------------------------------
+# KaTeX + Mermaid CDN references
+# ---------------------------------------------------------------------------
+
+
+class TestCdnLibraries:
+    """Both pages must reference KaTeX and Mermaid from CDN."""
+
+    def test_live_page_has_katex_css(self):
+        html = frontend.build_html("x.md")
+        assert frontend.KATEX_CSS in html
+        assert 'rel="stylesheet"' in html
+
+    def test_live_page_has_katex_js(self):
+        html = frontend.build_html("x.md")
+        assert frontend.KATEX_JS in html
+        assert frontend.KATEX_AUTORENDER_JS in html
+
+    def test_live_page_has_mermaid_js(self):
+        html = frontend.build_html("x.md")
+        assert frontend.MERMAID_JS in html
+
+    def test_share_page_has_katex_css(self):
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
+        assert frontend.KATEX_CSS in html
+
+    def test_share_page_has_katex_js(self):
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
+        assert frontend.KATEX_JS in html
+        assert frontend.KATEX_AUTORENDER_JS in html
+
+    def test_share_page_has_mermaid_js(self):
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
+        assert frontend.MERMAID_JS in html
+
+    def test_share_page_uses_script_src_not_inline_for_cdn_libs(self):
+        """CDN libs must be <script src> tags, not inlined."""
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
+        assert f'<script src="{frontend.MERMAID_JS}">' in html
+        assert f'<script src="{frontend.KATEX_JS}">' in html
+
+
+# ---------------------------------------------------------------------------
+# Mermaid code fence in core JS
+# ---------------------------------------------------------------------------
+
+
+class TestMermaidCodeFence:
+    """The core viewer JS must intercept ```mermaid fences and emit
+    <pre class=\"mermaid\"> instead of a highlighted code block."""
+
+    def test_core_js_has_mermaid_branch(self):
+        js = frontend._core_viewer_js()
+        assert "'mermaid'" in js
+        assert 'pre class="mermaid"' in js
+
+    def test_core_js_has_mermaid_init(self):
+        js = frontend._core_viewer_js()
+        assert "mermaid.initialize" in js
+        assert "theme: 'dark'" in js
+
+    def test_core_js_has_mermaid_run(self):
+        js = frontend._core_viewer_js()
+        assert "mermaid.run" in js
+
+    def test_live_page_has_mermaid_branch(self):
+        html = frontend.build_html("x.md")
+        assert 'pre class="mermaid"' in html
+
+    def test_share_page_has_mermaid_branch(self):
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
+        assert 'pre class="mermaid"' in html
+
+
+# ---------------------------------------------------------------------------
+# Math protection logic
+# ---------------------------------------------------------------------------
+
+
+class TestMathProtection:
+    """The core viewer JS must extract $...$ / $$...$$ before marked.parse
+    and restore them after, so marked doesn't mangle math syntax."""
+
+    def test_core_js_has_extract_math(self):
+        js = frontend._core_viewer_js()
+        assert "extractMath" in js
+        assert "_mathPlaceholders" in js
+
+    def test_core_js_has_restore_math(self):
+        js = frontend._core_viewer_js()
+        assert "restoreMath" in js
+
+    def test_core_js_has_render_markdown_wrapper(self):
+        """renderMarkdown wraps extract -> marked.parse -> restore."""
+        js = frontend._core_viewer_js()
+        assert "function renderMarkdown" in js
+        assert "extractMath" in js
+        assert "restoreMath" in js
+
+    def test_core_js_has_katex_auto_render(self):
+        js = frontend._core_viewer_js()
+        assert "renderMathInElement" in js
+        assert "$$" in js  # display delimiter
+        assert "delimiters" in js
+
+    def test_render_doc_uses_render_markdown_not_marked_parse(self):
+        js = frontend._core_viewer_js()
+        # renderDoc should call renderMarkdown, not marked.parse directly.
+        assert "renderMarkdown(state.current_text" in js
+
+    def test_core_js_has_mermaid_css(self):
+        """VALSTRO_CSS should style Mermaid containers."""
+        css = frontend.VALSTRO_CSS
+        assert "pre.mermaid" in css
+
+    def test_core_js_has_katex_css(self):
+        """VALSTRO_CSS should include KaTeX dark theme adjustments."""
+        css = frontend.VALSTRO_CSS
+        assert ".katex" in css

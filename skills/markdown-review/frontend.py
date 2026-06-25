@@ -29,6 +29,19 @@ from pathlib import Path
 # script — it is the single source of truth for versions, filenames and URLs.
 VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 
+# CDN-only libraries (not vendored). These are loaded from CDN in both the
+# live viewer and the standalone share page. The tool is used during LLM-
+# driven iteration sessions that are inherently online, so a CDN dependency
+# for these rendering libraries is acceptable.
+#
+# KaTeX: math/LaTeX rendering. Mermaid: diagram rendering.
+KATEX_CSS = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css"
+KATEX_JS = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.js"
+KATEX_AUTORENDER_JS = (
+    "https://cdn.jsdelivr.net/npm/katex@0.16/dist/contrib/auto-render.min.js"
+)
+MERMAID_JS = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
+
 # local filename -> CDN URL (used as fallback and by update-vendor.sh)
 VENDOR_ASSETS = {
     "marked.min.js": "https://cdn.jsdelivr.net/npm/marked@12/marked.min.js",
@@ -450,6 +463,19 @@ body{
 #import-box button.primary{background:var(--bb-500);border:none;color:#fff;font-weight:600;}
 #import-box button:hover{background:var(--bg-600);color:var(--bg-100);}
 #import-box button.primary:hover{background:var(--bb-400);}
+
+/* Mermaid diagram containers */
+#md-render pre.mermaid{
+  background:transparent;border:none;padding:0;margin:1em auto;overflow-x:auto;
+  display:flex;justify-content:center;
+}
+#md-render pre.mermaid svg{max-width:100%;height:auto;}
+
+/* KaTeX dark theme adjustments */
+#md-render .katex{color:var(--bg-100);}
+#md-render .katex-display{
+  margin:1em 0;overflow-x:auto;overflow-y:hidden;padding:0.5em 0;
+}
 """
 
 
@@ -469,6 +495,9 @@ marked.setOptions({ gfm:true, breaks:false });
 const renderer = new marked.Renderer();
 renderer.code = function(code, lang) {
   const language = (lang||'').toLowerCase().trim();
+  if(language === 'mermaid'){
+    return `<pre class="mermaid">${escapeHtml(code)}</pre>`;
+  }
   try {
     const h = (language && hljs.getLanguage(language))
       ? hljs.highlight(code, {language}).value : hljs.highlightAuto(code).value;
@@ -476,6 +505,43 @@ renderer.code = function(code, lang) {
   } catch(_) { return `<pre><code class="hljs">${escapeHtml(code)}</code></pre>`; }
 };
 marked.use({ renderer });
+
+// ── Mermaid (diagram rendering) ─────────────────────────────────────
+if (typeof mermaid !== 'undefined') {
+  mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
+}
+
+// ── Math protection (extract $...$ / $$...$$ before marked.parse) ───
+// Marked would mangle math delimiters (e.g. turn _ into <em>), so we extract
+// math spans into placeholders before parsing, then restore them after.
+const _mathPlaceholders = [];
+function extractMath(text){
+  _mathPlaceholders.length = 0;
+  let idx = 0;
+  // Match $$...$$ (display) and $...$ (inline), non-greedy.
+  // Order matters: display math ($$) must be matched before inline ($).
+  text = text.replace(/\\$\\$([\\s\\S]+?)\\$\\$/g, (m, inner) => {
+    const token = `@@MATH:${idx}@@`;
+    _mathPlaceholders[idx] = '$$' + inner + '$$';
+    idx++;
+    return token;
+  });
+  text = text.replace(/\\$([^\\n$]+?)\\$/g, (m, inner) => {
+    const token = `@@MATH:${idx}@@`;
+    _mathPlaceholders[idx] = '$' + inner + '$';
+    idx++;
+    return token;
+  });
+  return text;
+}
+function restoreMath(html){
+  return html.replace(/@@MATH:(\\d+)@@/g, (m, i) => _mathPlaceholders[+i] || m);
+}
+function renderMarkdown(text){
+  const protected_text = extractMath(text || '');
+  const html = marked.parse(protected_text);
+  return restoreMath(html);
+}
 
 function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 
@@ -607,7 +673,7 @@ function renderDiff(){
 
 // ── Render document ──────────────────────────────────────────────────
 function renderDoc(patch){
-  const html=marked.parse(state.current_text||'');
+  const html=renderMarkdown(state.current_text||'');
   if(patch && mdRender.childNodes.length){
     unwrapCommentMarks(mdRender);
     const n=diffAndPatch(mdRender, html);
@@ -615,7 +681,36 @@ function renderDoc(patch){
   } else {
     mdRender.innerHTML=html;
   }
+  renderMath(mdRender);
+  renderMermaid();
   applyCommentHighlights();
+}
+
+// ── Post-render: KaTeX math typesetting ──────────────────────────────
+function renderMath(root){
+  if(typeof renderMathInElement === 'function'){
+    try {
+      renderMathInElement(root, {
+        delimiters: [
+          {left: '$$', right: '$$', display: true},
+          {left: '$', right: '$', display: false},
+        ],
+        throwOnError: false
+      });
+    } catch(_) {}
+  }
+}
+
+// ── Post-render: Mermaid diagram rendering ────────────────────────────
+let _mermaidRunning = false;
+function renderMermaid(){
+  const els = mdRender.querySelectorAll('pre.mermaid:not([data-processed])');
+  if(!els.length) return;
+  if(typeof mermaid === 'undefined' || _mermaidRunning) return;
+  _mermaidRunning = true;
+  mermaid.run({ querySelector: 'pre.mermaid:not([data-processed])' })
+    .catch(()=>{})
+    .finally(()=>{ _mermaidRunning = false; });
 }
 
 function unwrapCommentMarks(root){
@@ -1194,8 +1289,12 @@ def build_html(name: str) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{safe_name} — mdedit</title>
 <link rel="stylesheet" href="{_asset_url("highlight-onedark.min.css")}">
+<link rel="stylesheet" href="{KATEX_CSS}">
 <script src="{_asset_url("highlight.min.js")}"></script>
 <script src="{_asset_url("marked.min.js")}"></script>
+<script src="{KATEX_JS}"></script>
+<script src="{KATEX_AUTORENDER_JS}"></script>
+<script src="{MERMAID_JS}"></script>
 <style>{css}</style>
 </head><body>
 
@@ -1290,8 +1389,12 @@ def build_share_html(snapshot: dict) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{safe_name} — review (shared)</title>
 {_inline_or_url("highlight-onedark.min.css", "style")}
+<link rel="stylesheet" href="{KATEX_CSS}">
 {_inline_or_url("highlight.min.js", "script")}
 {_inline_or_url("marked.min.js", "script")}
+<script src="{KATEX_JS}"></script>
+<script src="{KATEX_AUTORENDER_JS}"></script>
+<script src="{MERMAID_JS}"></script>
 <style>{css}</style>
 </head><body>
 
