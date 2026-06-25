@@ -37,7 +37,9 @@ VENDOR_DIR = Path(__file__).resolve().parent / "vendor"
 # KaTeX: math/LaTeX rendering. Mermaid: diagram rendering.
 KATEX_CSS = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css"
 KATEX_JS = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.js"
-KATEX_AUTORENDER_JS = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/contrib/auto-render.min.js"
+KATEX_AUTORENDER_JS = (
+    "https://cdn.jsdelivr.net/npm/katex@0.16/dist/contrib/auto-render.min.js"
+)
 MERMAID_JS = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
 
 # local filename -> CDN URL (used as fallback and by update-vendor.sh)

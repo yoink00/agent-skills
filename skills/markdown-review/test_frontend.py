@@ -358,29 +358,29 @@ class TestCdnLibraries:
         assert frontend.MERMAID_JS in html
 
     def test_share_page_has_katex_css(self):
-        html = frontend.build_share_html({
-            "name": "d.md", "current_text": "", "edits": [], "comments": []
-        })
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
         assert frontend.KATEX_CSS in html
 
     def test_share_page_has_katex_js(self):
-        html = frontend.build_share_html({
-            "name": "d.md", "current_text": "", "edits": [], "comments": []
-        })
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
         assert frontend.KATEX_JS in html
         assert frontend.KATEX_AUTORENDER_JS in html
 
     def test_share_page_has_mermaid_js(self):
-        html = frontend.build_share_html({
-            "name": "d.md", "current_text": "", "edits": [], "comments": []
-        })
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
         assert frontend.MERMAID_JS in html
 
     def test_share_page_uses_script_src_not_inline_for_cdn_libs(self):
         """CDN libs must be <script src> tags, not inlined."""
-        html = frontend.build_share_html({
-            "name": "d.md", "current_text": "", "edits": [], "comments": []
-        })
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
         assert f'<script src="{frontend.MERMAID_JS}">' in html
         assert f'<script src="{frontend.KATEX_JS}">' in html
 
@@ -413,9 +413,9 @@ class TestMermaidCodeFence:
         assert 'pre class="mermaid"' in html
 
     def test_share_page_has_mermaid_branch(self):
-        html = frontend.build_share_html({
-            "name": "d.md", "current_text": "", "edits": [], "comments": []
-        })
+        html = frontend.build_share_html(
+            {"name": "d.md", "current_text": "", "edits": [], "comments": []}
+        )
         assert 'pre class="mermaid"' in html
 
 

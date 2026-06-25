@@ -209,7 +209,9 @@ class TestMermaidRendering:
             assert "graph LR" in mermaid_el.inner_text()
 
             # It did NOT become a highlighted code block.
-            assert page.locator("#md-render pre code.hljs.language-mermaid").count() == 0
+            assert (
+                page.locator("#md-render pre code.hljs.language-mermaid").count() == 0
+            )
             browser.close()
 
     def test_mermaid_run_is_called_and_processes_element(self, tmp_path):
@@ -368,9 +370,7 @@ def test_regular_code_fence_still_highlighted(tmp_path):
         page.wait_for_selector("#md-render")
 
         # The python fence produced a highlighted code block.
-        page.wait_for_selector(
-            "#md-render pre code.hljs.language-python", timeout=5000
-        )
+        page.wait_for_selector("#md-render pre code.hljs.language-python", timeout=5000)
         browser.close()
 
 
