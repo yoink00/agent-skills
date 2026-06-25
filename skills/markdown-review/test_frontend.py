@@ -152,6 +152,20 @@ class TestBuildHtml:
         assert "Import Comments\u2026" in html
         assert "Import from File\u2026" in html
 
+    def test_has_download_button(self):
+        # The viewer can download the raw markdown source of the document.
+        html = frontend.build_html("x.md")
+        assert 'id="download-btn"' in html
+        assert ">Download<" in html
+
+    def test_live_js_has_download_handler(self):
+        html = frontend.build_html("x.md")
+        # The handler builds a text/markdown blob and downloads it as DOC_NAME.
+        assert "getElementById('download-btn')" in html
+        assert "text/markdown" in html
+        # It must download the current document text, not the comments JSON.
+        assert "state.current_text" in html
+
     def test_name_independence(self):
         # Different names produce different titles but the same shell.
         a = frontend.build_html("a.md")
@@ -223,6 +237,18 @@ class TestBuildShareHtml:
             'id="import-file"',
         ):
             assert anchor not in html, anchor
+
+    def test_has_download_button(self):
+        # The share page can also download the raw markdown source.
+        html = frontend.build_share_html(self._snapshot())
+        assert 'id="download-btn"' in html
+        assert ">Download<" in html
+
+    def test_share_js_has_download_handler(self):
+        html = frontend.build_share_html(self._snapshot())
+        assert "getElementById('download-btn')" in html
+        assert "text/markdown" in html
+        assert "state.current_text" in html
 
     def test_no_server_api_calls(self):
         """The share page must not make any fetch('/api/...') calls."""

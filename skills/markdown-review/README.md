@@ -28,6 +28,8 @@ split into focused modules alongside it: `model.py` (session state),
   document (with the full commenting UI) that a colleague can open in any
   browser without a server. Their comments export as JSON and import back into
   the live session.
+- **Download raw markdown** — grab the document's current markdown source as a
+  file straight from the viewer (handy for sending the file to a reviewer).
 
 ## Requirements
 
