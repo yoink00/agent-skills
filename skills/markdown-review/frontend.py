@@ -682,47 +682,131 @@ function unwrapCommentMarks(root){
     p.removeChild(m); p.normalize();
   });
 }
-function wrapQuotes(root, quotes){
-  if(!quotes.length) return;
-  quotes=[...quotes].sort((a,b)=>b.length-a.length);
-  const collect=()=>{
-    const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
-      acceptNode(n){ return n.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }
-    });
-    const nodes=[]; while(walk.nextNode()) nodes.push(walk.currentNode);
-    return nodes;
-  };
-  const wrapNode=(node,q)=>{
-    const text=node.nodeValue;
-    let idx=text.indexOf(q);
-    if(idx<0) return;
-    const frag=document.createDocumentFragment();
-    let last=0;
-    while(idx>=0){
-      if(idx>last) frag.appendChild(document.createTextNode(text.slice(last,idx)));
-      const mk=document.createElement('mark');
-      mk.className='has-comment';
-      mk.textContent=text.slice(idx,idx+q.length);
-      frag.appendChild(mk);
-      last=idx+q.length;
-      idx=text.indexOf(q,last);
+// Each comment carries the selected text (``quote``) plus a little surrounding
+// context (``context_before``/``context_after``) captured from the raw
+// markdown. Highlighting must re-derive the location after every re-render
+// (the DOM shifts when the doc is edited), so we search for the quote in a
+// flat view of the rendered text. Two earlier failure modes are fixed here:
+//   * commenting on a short token like "is" used to light up EVERY substring
+//     occurrence — now the stored context disambiguates to the one the user
+//     picked (falling back to the first when context can't resolve it).
+//   * selections spanning inline markup, or ending at a block boundary (a
+//     whole line / bullet, which the browser ends with a newline), matched
+//     nothing — now matching is whitespace-normalised and can cross inline
+//     elements.
+const _BLOCK_TAGS='P,LI,H1,H2,H3,H4,H5,H6,DIV,BLOCKQUOTE,TD,TH,PRE,SECTION,ARTICLE,DD,DT,FIGCAPTION,SUMMARY';
+function _blockAncestor(el){ return el ? el.closest(_BLOCK_TAGS) : null; }
+function _norm(s){ return (s||'').replace(/\\s+/g,' ').trim(); }
+
+// Flatten every selectable text node under ``root`` into one search string
+// with a per-char map back into the DOM. A null ``src`` marks a boundary
+// between block elements so a trailing-newline selection can still match.
+// Text already inside a comment mark is skipped.
+function _buildTextMap(root){
+  const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
+    acceptNode(n){
+      if(!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      if(n.parentElement && n.parentElement.closest('mark.has-comment')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
     }
-    if(last<text.length) frag.appendChild(document.createTextNode(text.slice(last)));
-    node.parentNode.replaceChild(frag,node);
-  };
-  for(const q of quotes){
-    for(const node of collect()){
-      if(node.parentNode) wrapNode(node,q);
-    }
+  });
+  const flat=[], src=[]; let prevBlock=null;
+  while(walk.nextNode()){
+    const node=walk.currentNode;
+    const block=_blockAncestor(node.parentElement);
+    if(prevBlock!==null && block!==prevBlock){ flat.push('\\n'); src.push(null); }
+    prevBlock=block;
+    const s=node.nodeValue;
+    for(let i=0;i<s.length;i++){ flat.push(s[i]); src.push({node,offset:i}); }
+  }
+  return { flat:flat.join(''), src };
+}
+
+// Whitespace-normalise ``flat`` (collapse runs to one space, trim ends).
+// ``map[i]`` is the flat index that normalised char ``i`` came from.
+function _normaliseFlat(flat){
+  const nflat=[], map=[]; let lastSpace=true;
+  for(let i=0;i<flat.length;i++){
+    const space=/\\s/.test(flat[i]);
+    if(space){ if(!lastSpace){ nflat.push(' '); map.push(i); } lastSpace=true; }
+    else { nflat.push(flat[i]); map.push(i); lastSpace=false; }
+  }
+  if(nflat.length && nflat[nflat.length-1]===' '){ nflat.pop(); map.pop(); }
+  return { nflat:nflat.join(''), map };
+}
+
+// How well the neighbours of candidate [start,end) match the captured context.
+// The neighbour slice is trimmed so a single abutting space does not zero out
+// an otherwise exact match.
+function _scoreContext(nflat, start, end, before, after){
+  let score=0;
+  if(before){ const nb=_norm(before); if(nb){
+    const hay=nflat.slice(Math.max(0,start-nb.length),start).trimEnd();
+    let i=nb.length, j=hay.length;
+    while(i>0 && j>0 && nb[i-1]===hay[j-1]){ score++; i--; j--; }
+  }}
+  if(after){ const na=_norm(after); if(na){
+    const hay=nflat.slice(end,end+na.length).trimStart();
+    let i=0;
+    while(i<na.length && i<hay.length && na[i]===hay[i]){ score++; i++; }
+  }}
+  return score;
+}
+
+// Wrap the single best occurrence of ``quote`` under ``root``. Returns true
+// when a mark is created.
+function wrapOne(root, quote, before, after){
+  const needle=_norm(quote);
+  if(!needle) return false;
+  const { flat, src }=_buildTextMap(root);
+  if(!flat) return false;
+  const { nflat, map }=_normaliseFlat(flat);
+  if(!nflat) return false;
+
+  const candidates=[]; let from=0, idx;
+  while((idx=nflat.indexOf(needle,from))>=0){ candidates.push(idx); from=idx+1; }
+  if(!candidates.length) return false;
+
+  let best=candidates[0], bestScore=-1;
+  for(const c of candidates){
+    const s=_scoreContext(nflat,c,c+needle.length,before,after);
+    if(s>bestScore){ bestScore=s; best=c; }
+  }
+
+  const fStart=map[best], fEnd=map[best+needle.length-1];
+  const startSrc=fStart==null?null:src[fStart];
+  const endSrc=fEnd==null?null:src[fEnd];
+  if(!startSrc || !endSrc) return false;
+  // Don't wrap across a block boundary — that would nest block elements inside
+  // an inline <mark>. Such rare cross-block quotes are skipped.
+  if(_blockAncestor(startSrc.node.parentElement)!==_blockAncestor(endSrc.node.parentElement)) return false;
+
+  const range=document.createRange();
+  range.setStart(startSrc.node,startSrc.offset);
+  range.setEnd(endSrc.node,endSrc.offset+1);
+  try {
+    const frag=range.extractContents();
+    const mk=document.createElement('mark');
+    mk.className='has-comment';
+    mk.appendChild(frag);
+    range.insertNode(mk);
+    return true;
+  } catch(_) { return false; }
+}
+
+function wrapQuotes(root, comments){
+  if(!comments.length) return;
+  // Longest quote first: once it is wrapped, its text is excluded from later
+  // searches, so a shorter quote it contains resolves to a different spot.
+  const sorted=[...comments].sort((a,b)=>(b.quote||'').length-(a.quote||'').length);
+  for(const c of sorted){
+    if(c.quote) wrapOne(root, c.quote, c.context_before||'', c.context_after||'');
   }
 }
 
 function applyCommentHighlights(){
   unwrapCommentMarks(mdRender);
-  const quotes=[...new Set(
-    state.comments.filter(c=>c.source==='doc'&&c.quote).map(c=>c.quote)
-  )];
-  wrapQuotes(mdRender, quotes);
+  wrapQuotes(mdRender, state.comments.filter(c=>c.source==='doc'&&c.quote));
 }
 
 function applyDiffCommentHighlights(){
@@ -730,12 +814,12 @@ function applyDiffCommentHighlights(){
   const byRound=new Map();
   for(const c of state.comments){
     if(c.source!=='diff'||!c.round||!c.quote) continue;
-    if(!byRound.has(c.round)) byRound.set(c.round, new Set());
-    byRound.get(c.round).add(c.quote);
+    if(!byRound.has(c.round)) byRound.set(c.round, []);
+    byRound.get(c.round).push(c);
   }
-  for(const [round, quotes] of byRound){
+  for(const [round, comments] of byRound){
     const grp=diffRender.querySelector('.round-group[data-round="'+round+'"]');
-    if(grp) wrapQuotes(grp, [...quotes]);
+    if(grp) wrapQuotes(grp, comments);
   }
 }
 
