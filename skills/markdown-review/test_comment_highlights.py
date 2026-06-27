@@ -229,3 +229,127 @@ def test_diff_view_highlights_two_phrases_on_same_line(session):
         assert _count_marks(page, "#diff-render", "a buffer") >= 1
 
         browser.close()
+
+
+@pytest.fixture
+def make_session(tmp_path):
+    """Factory: spawn a daemon on a caller-supplied document and tear it down
+    at the end of the test. Returns a callable that yields the session dict."""
+    info = {}
+
+    def _make(doc_text):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(exist_ok=True)
+        doc = tmp_path / "doc.md"
+        doc.write_text(doc_text)
+        info.update(_spawn(state_dir, doc))
+        return {
+            "port": info["port"],
+            "url": f"http://127.0.0.1:{info['port']}",
+            "doc": doc,
+            "state_dir": state_dir,
+        }
+
+    yield _make
+    if info.get("pid"):
+        _stop(info["pid"])
+
+
+def test_doc_view_highlights_only_the_anchored_occurrence(make_session):
+    """Commenting on a short, repeated token ("is") must light up exactly the
+    occurrence the user picked — identified by its stored context — and not
+    every substring match. Regression: "is" inside "This" used to light up
+    alongside the real target."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        session = make_session("# Token test\n\nThe cat is black. This dog is brown.\n")
+        page.goto(session["url"])
+        page.wait_for_selector("#md-render")
+
+        # "is" appears three times: after "cat" (standalone), inside "This",
+        # and after "dog" (standalone). Anchor to the first via its context.
+        _post_comment(
+            session["port"],
+            body="c",
+            quote="is",
+            context_before="cat ",
+            context_after=" black",
+            source="doc",
+        )
+
+        page.wait_for_function(
+            "() => document.querySelectorAll('#md-render mark.has-comment').length > 0",
+            timeout=5000,
+        )
+        marks = page.eval_on_selector_all(
+            "#md-render mark.has-comment",
+            "ms => ms.map(m => ({"
+            "  text: m.textContent,"
+            "  before: (m.previousSibling && m.previousSibling.nodeValue) || '',"
+            "  after: (m.nextSibling && m.nextSibling.nodeValue) || ''"
+            "}))",
+        )
+        assert len(marks) == 1
+        assert marks[0]["text"] == "is"
+        assert marks[0]["before"].endswith("cat ")
+        assert marks[0]["after"].startswith(" black")
+
+        browser.close()
+
+
+def test_doc_view_highlights_selection_spanning_inline_markup(make_session):
+    """A selection that crosses an inline element (``Some **bold** text``
+    renders as three text nodes) must highlight as one span. Regression:
+    naive single-node indexOf matched nothing because no single text node
+    held the whole quote."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        session = make_session("# Inline test\n\nSome **bold** text here.\n")
+        page.goto(session["url"])
+        page.wait_for_selector("#md-render")
+
+        _post_comment(
+            session["port"],
+            body="c",
+            quote="Some bold text",
+            source="doc",
+        )
+
+        page.wait_for_function(
+            "() => [...document.querySelectorAll('#md-render mark.has-comment')]"
+            ".some(m => m.textContent === 'Some bold text')",
+            timeout=5000,
+        )
+        assert _count_marks(page, "#md-render", "Some bold text") == 1
+
+        browser.close()
+
+
+def test_doc_view_highlights_whole_bullet_line(make_session):
+    """Selecting a whole bullet line — which the browser serialises with a
+    trailing newline — must still highlight. Regression: the trailing newline
+    defeated single-node indexOf so nothing lit up."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page()
+        session = make_session("# List test\n\n- alpha item\n- beta item\n")
+        page.goto(session["url"])
+        page.wait_for_selector("#md-render")
+
+        _post_comment(
+            session["port"],
+            body="c",
+            quote="alpha item\n",
+            source="doc",
+        )
+
+        page.wait_for_function(
+            "() => [...document.querySelectorAll('#md-render mark.has-comment')]"
+            ".some(m => m.textContent === 'alpha item')",
+            timeout=5000,
+        )
+        assert _count_marks(page, "#md-render", "alpha item") == 1
+
+        browser.close()
