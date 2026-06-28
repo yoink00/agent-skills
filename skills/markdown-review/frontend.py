@@ -77,7 +77,7 @@ def _script_json(obj) -> str:
     return encoded
 
 
-VALSTRO_CSS = r"""
+VIEWER_CSS = r"""
 :root {
   --bg-1000:#05080A; --bg-900:#0C1217; --bg-800:#151C22; --bg-700:#21282E;
   --bg-600:#30373D; --bg-500:#6E7881; --bg-400:#8B959E; --bg-300:#AFBBC5;
@@ -1354,7 +1354,7 @@ def build_html(name: str) -> str:
     State is fetched from the server via JSON. The top bar includes a Share
     button that downloads a standalone HTML copy for offline review.
     """
-    css = VALSTRO_CSS
+    css = VIEWER_CSS
     safe_name = name.replace("<", "&lt;").replace('"', "&quot;")
     return f"""<!DOCTYPE html>
 <html lang="en"><head>
@@ -1454,7 +1454,7 @@ def build_share_html(snapshot: dict) -> str:
     are inlined so the page works with no server. Comments are exported as a
     downloadable JSON file and/or a copy-paste text box.
     """
-    css = VALSTRO_CSS
+    css = VIEWER_CSS
     name = snapshot.get("name", "document.md")
     safe_name = name.replace("<", "&lt;").replace('"', "&quot;")
     return f"""<!DOCTYPE html>

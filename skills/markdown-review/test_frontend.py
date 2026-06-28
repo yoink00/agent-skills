@@ -120,7 +120,7 @@ class TestBuildHtml:
 
     def test_embeds_css_and_asset_urls(self):
         html = frontend.build_html("x.md")
-        assert frontend.VALSTRO_CSS.strip()[:60] in html
+        assert frontend.VIEWER_CSS.strip()[:60] in html
         # All three assets are referenced from CDN.
         for url in frontend.CDN_ASSETS.values():
             assert url in html
@@ -274,7 +274,7 @@ class TestBuildShareHtml:
 
     def test_contains_css(self):
         html = frontend.build_share_html(self._snapshot())
-        assert frontend.VALSTRO_CSS.strip()[:60] in html
+        assert frontend.VIEWER_CSS.strip()[:60] in html
 
     def test_escapes_html_in_displayed_name(self):
         name = '<img src=x>"evil".md'
@@ -424,11 +424,11 @@ class TestMathProtection:
         assert "renderMarkdown(state.current_text" in js
 
     def test_core_js_has_mermaid_css(self):
-        """VALSTRO_CSS should style Mermaid containers."""
-        css = frontend.VALSTRO_CSS
+        """VIEWER_CSS should style Mermaid containers."""
+        css = frontend.VIEWER_CSS
         assert "pre.mermaid" in css
 
     def test_core_js_has_katex_css(self):
-        """VALSTRO_CSS should include KaTeX dark theme adjustments."""
-        css = frontend.VALSTRO_CSS
+        """VIEWER_CSS should include KaTeX dark theme adjustments."""
+        css = frontend.VIEWER_CSS
         assert ".katex" in css
