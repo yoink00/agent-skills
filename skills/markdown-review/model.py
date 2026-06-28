@@ -402,6 +402,18 @@ class Session:
         with self._cond:
             self.last_activity = time.time()
 
+    def wait_idle(self, poll: float) -> float:
+        """Wait up to ``poll`` seconds, then return seconds since ``last_activity``.
+
+        Used by the idle-reaper thread so it does not reach into the session's
+        private lock/condition from outside the model. The reaper calls this in
+        a loop and shuts the daemon down once the returned idle time exceeds its
+        threshold; any edit, comment, poll, or touch resets ``last_activity``.
+        """
+        with self._cond:
+            self._cond.wait(timeout=poll)
+            return time.time() - self.last_activity
+
     # -- waiters ------------------------------------------------------------
 
     def wait_for_version(self, since: int, timeout: float = 25.0) -> int:
@@ -453,6 +465,27 @@ class Session:
                 "edit_count": len(self.edits),
                 "comments": [c.to_dict() for c in self.comments],
             }
+
+    def reconcile_disk(self, disk_text: str) -> None:
+        """Re-seed the session to match ``disk_text`` after an external edit.
+
+        The file on disk is the source of truth, so when a document has been
+        edited outside mdedit since the session was saved, the stale saved text
+        and its diff history are discarded and comments whose quotes no longer
+        appear in the document are flagged stale. Comments themselves are kept
+        (they are the user's feedback), only their anchoring is re-evaluated.
+        """
+        with self._cond:
+            self.original_text = disk_text
+            self.current_text = disk_text
+            self.edits = []
+            for c in self.comments:
+                if c.quote and c.quote not in disk_text:
+                    c.stale = True
+            self.version += 1
+            self.last_activity = time.time()
+            self._cond.notify_all()
+            self._notify_change()
 
     def restore(self, snap: dict) -> None:
         """Populate this session from a snapshot dict (inverse of ``snapshot``).

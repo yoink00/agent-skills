@@ -144,12 +144,17 @@ def cmd_resume(args) -> int:
         )
         return 1
 
-    # Check for external edits.
+    # Check for external edits. The daemon reconciles to disk on resume (so the
+    # live viewer matches reality and stale diffs are dropped), but we surface a
+    # warning + the length delta so the caller knows history was reset.
     warning = None
     disk_text = path.read_text(encoding="utf-8")
     saved_text = saved.get("current_text", "")
     if disk_text != saved_text:
-        warning = "document was modified externally since the session was saved"
+        warning = (
+            "document was modified externally; session reset to match disk "
+            "(diff history discarded, affected comments flagged stale)"
+        )
 
     # If a daemon is already running for this doc, don't spawn a new one.
     port = _find_running(path)
@@ -254,25 +259,34 @@ def cmd_review(args) -> int:
             file=sys.stderr,
         )
 
-    # Block until the user clicks Send (or timeout). We poll the server.
+    # Block until the user clicks Send (or the timeout). Each iteration issues
+    # one blocking GET to /api/review-wait, which sleeps server-side on the
+    # session's submit Condition (releasing the lock so the browser can still
+    # poll) for up to ~20s, then returns the current payload. This replaces the
+    # old 0.6s busy-poll: far fewer requests, the server's blocking primitive is
+    # actually used, and each call's entry ``touch()`` keeps the idle reaper at
+    # bay for the long human wait.
     deadline = None if args.timeout <= 0 else time.monotonic() + args.timeout
+    payload: dict = {}
     while True:
+        wait_t = 20.0
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            wait_t = min(20.0, remaining)
         try:
-            status, data = _request(port, "GET", "/api/comments", timeout=5.0)
+            _, payload = _request(
+                port, "GET", f"/api/review-wait?t={wait_t}", timeout=wait_t + 5.0
+            )
         except OSError:
             print(json.dumps({"ok": False, "error": "session ended"}), file=sys.stderr)
             return 1
-        if data.get("submitted"):
+        if payload.get("submitted"):
             break
-        if deadline is not None and time.monotonic() > deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             break
-        time.sleep(0.6)
 
-    try:
-        _, payload = _request(port, "GET", "/api/comments", timeout=5.0)
-    except OSError:
-        print(json.dumps({"ok": False, "error": "session ended"}), file=sys.stderr)
-        return 1
     result = {
         "path": str(path),
         "submitted": payload.get("submitted", False),

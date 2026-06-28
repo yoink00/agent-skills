@@ -12,6 +12,7 @@ the front-end (``frontend.build_html``).
 
 from __future__ import annotations
 
+import base64
 import http.client
 import http.server
 import json
@@ -19,6 +20,7 @@ import os
 import signal
 import socket
 import socketserver
+import sys
 import threading
 import time
 import webbrowser
@@ -51,6 +53,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
+    def handle_error(self, *_):
+        # Don't dump a full traceback (the daemon's std streams are /dev/null in
+        # production), but never swallow an error silently — a one-liner to stderr
+        # keeps real routing/handler bugs debuggable when run in the foreground.
+        try:
+            info = sys.exc_info()
+            exc = info[1]
+            msg = f"{type(exc).__name__}: {exc}" if exc else "unknown error"
+        except Exception:
+            msg = "unknown error"
+        sys.stderr.write(f"mdedit handler error on {self.command} {self.path}: {msg}\n")
+
     # -- helpers ------------------------------------------------------------
 
     def _json(self, obj, code=200):
@@ -62,15 +76,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_body(self) -> dict:
+    def _read_body(self) -> dict | None:
+        """Read and JSON-decode the request body.
+
+        Returns the decoded dict, an empty dict when no body was sent, or
+        ``None`` when a body *was* sent but could not be parsed as a JSON
+        object (so callers can surface a 400 rather than silently treating a
+        malformed request as "no edits").
+        """
         length = int(self.headers.get("Content-Length", "0") or "0")
         if not length:
             return {}
         raw = self.rfile.read(length)
         try:
-            return json.loads(raw.decode("utf-8"))
+            obj = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            return {}
+            return None
+        if not isinstance(obj, dict):
+            return None
+        return obj
+
+    def _is_authorized_local(self) -> bool:
+        """Reject cross-origin mutating requests.
+
+        The daemon listens on the loopback interface only, but a malicious page
+        visited by the user can still issue "simple" CORS requests (e.g. with
+        ``Content-Type: text/plain``) at ``http://127.0.0.1:<port>`` — which the
+        browser does not preflight and which the server would otherwise happily
+        honour (editing the document, stopping the session, …). Require the
+        ``Host`` to name the local address and, when the browser advertises an
+        ``Origin`` / ``Sec-Fetch-Site``, require it to be same-origin. CLI
+        clients (no ``Origin``, ``Host: 127.0.0.1:<port>``) pass.
+        """
+        port = 0
+        addr = self.server.server_address
+        if isinstance(addr, tuple):
+            port = addr[1]
+        local_hosts = (f"127.0.0.1:{port}", f"[::1]:{port}", f"localhost:{port}")
+        if self.headers.get("Host", "") not in local_hosts:
+            return False
+        origin = self.headers.get("Origin")
+        if origin:
+            local_origins = {
+                f"http://127.0.0.1:{port}",
+                f"http://[::1]:{port}",
+                f"http://localhost:{port}",
+            }
+            if origin not in local_origins:
+                return False
+        sfs = self.headers.get("Sec-Fetch-Site", "")
+        if sfs and sfs not in ("same-origin", "same-site", "none"):
+            return False
+        return True
 
     # -- routing ------------------------------------------------------------
 
@@ -100,6 +157,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"version": ver, "submitted": self.session.submitted})
         elif path == "/api/ping":
             self._json({"ok": True, "path": str(self.session.path)})
+        elif path == "/api/review-wait":
+            # Blocking read used by the CLI ``review`` command. Blocks inside
+            # ``wait_for_submit`` (which releases the lock while waiting, so the
+            # browser's poll and other reads proceed concurrently) until the
+            # user submits or the per-call timeout elapses, then returns the
+            # comments payload. ``touch`` on entry keeps the idle reaper alive
+            # across a long human-wait. Capped at 25s per call so the CLI loop
+            # also enforces its own deadline and detects a dead daemon promptly.
+            q = parse_qs(p.query)
+            try:
+                wait_t = float(q.get("t", ["20"])[0])
+            except (ValueError, IndexError):
+                wait_t = 20.0
+            wait_t = max(0.0, min(wait_t, 25.0))
+            self.session.touch()
+            self.session.wait_for_submit(timeout=wait_t)
+            self._json(self.session.comments_payload())
         elif path == "/api/share":
             html = build_share_html(self.session.snapshot()).encode("utf-8")
             self.send_response(200)
@@ -112,10 +186,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"error": "not found"}, 404)
 
     def do_POST(self):
+        if not self._is_authorized_local():
+            self._json({"error": "forbidden"}, 403)
+            return
         p = urlparse(self.path)
         path = p.path
+        data = self._read_body()
+        if data is None:
+            self._json({"error": "invalid JSON body"}, 400)
+            return
         if path == "/api/edit":
-            data = self._read_body()
             edits = data.get("edits")
             if edits is None:
                 edits = [
@@ -146,7 +226,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 200 if not errors else 422,
             )
         elif path == "/api/comment":
-            data = self._read_body()
             c = self.session.add_comment(
                 data.get("body", ""),
                 data.get("quote", ""),
@@ -159,18 +238,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             )
             self._json(c.to_dict())
         elif path == "/api/comment/delete":
-            data = self._read_body()
             ok = self.session.delete_comment(int(data.get("id", -1)))
             self._json({"ok": ok})
         elif path == "/api/comment/edit":
-            data = self._read_body()
             c = self.session.edit_comment(int(data.get("id", -1)), data.get("body", ""))
             if c is not None:
                 self._json(c.to_dict())
             else:
                 self._json({"ok": False, "error": "comment not found"}, 404)
         elif path == "/api/comment/reply":
-            data = self._read_body()
             r = self.session.add_reply(
                 int(data.get("comment_id", -1)),
                 data.get("body", ""),
@@ -181,16 +257,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 self._json({"ok": False, "error": "comment not found"}, 404)
         elif path == "/api/import":
-            data = self._read_body()
-            # Accept either {"comments": [...]} or a bare [...].
-            payload = data.get("comments", []) if isinstance(data, dict) else data
+            payload = data.get("comments", [])
             if not isinstance(payload, list):
                 self._json({"ok": False, "error": "expected a comments array"}, 422)
                 return
             summary = self.session.import_comments(payload)
             self._json({"ok": True, **summary})
         elif path == "/api/diffs/clear":
-            data = self._read_body()
             keep_current = bool(data.get("keep_current", True))
             removed = self.session.clear_diffs(keep_current=keep_current)
             self._json(
@@ -227,7 +300,24 @@ class Server(socketserver.ThreadingTCPServer):
 
 
 def _state_key(path: Path) -> str:
-    """Return the filesystem-safe key derived from a document's absolute path."""
+    """Return a collision-free, filesystem-safe key for a document's absolute path.
+
+    Earlier versions derived the key by replacing path separators with ``_`` —
+    but ``/a_b/c`` and ``/a/b_c`` then mapped to the same key, so two different
+    documents silently shared one daemon/session state file. URL-safe base64 of
+    the resolved path is injective and uses only ``[A-Za-z0-9_-]`` (no path
+    separators), so each document gets its own state directory.
+    """
+    return base64.urlsafe_b64encode(str(path.resolve()).encode("utf-8")).decode("ascii")
+
+
+def _legacy_state_key(path: Path) -> str:
+    """Old separator-replacement key scheme — kept only to read pre-existing state.
+
+    This scheme collides on underscore-bearing paths (see :func:`_state_key`),
+    so it is never used for *writing*; it exists purely so sessions saved under
+    the old scheme can still be found and resumed after an upgrade.
+    """
     return str(path.resolve()).replace(os.sep, "_").replace(":", "_")
 
 
@@ -240,9 +330,15 @@ def _state_file(path: Path) -> Path:
 
 
 def _legacy_state_file(path: Path) -> Path:
-    """Return the old-style flat state file for backward-compat reads."""
-    key = _state_key(path)
+    """Return the old-style flat daemon state file for backward-compat reads."""
+    key = _legacy_state_key(path)
     return STATE_DIR / f"{key}.json"
+
+
+def _legacy_daemon_file(path: Path) -> Path:
+    """Return the old-style per-directory daemon state file for backward-compat."""
+    key = _legacy_state_key(path)
+    return STATE_DIR / key / "daemon.json"
 
 
 def _session_file(path: Path) -> Path:
@@ -253,48 +349,64 @@ def _session_file(path: Path) -> Path:
     return d / "session.json"
 
 
+def _legacy_session_file(path: Path) -> Path:
+    """Return the old-style session snapshot file for backward-compat reads."""
+    key = _legacy_state_key(path)
+    return STATE_DIR / key / "session.json"
+
+
 def _read_state_file(path: Path) -> Path | None:
-    """Return the existing state file (new or legacy) for *path*, or None."""
-    sf = _state_file(path)
-    if sf.exists():
-        return sf
-    legacy = _legacy_state_file(path)
-    if legacy.exists():
-        return legacy
+    """Return the existing daemon state file (current or any legacy form) for *path*."""
+    for sf in (_state_file(path), _legacy_state_file(path), _legacy_daemon_file(path)):
+        if sf.exists():
+            return sf
     return None
 
 
 def _save_session(session: Session) -> None:
-    """Write the session snapshot to disk (write-through persistence)."""
+    """Write the session snapshot to disk atomically (write-through persistence).
+
+    Writes to a sibling temp file then ``os.replace``s it into place so a crash
+    mid-write cannot leave a truncated ``session.json`` (which would silently
+    lose the resumable session on the next load).
+    """
     sf = _session_file(session.path)
     try:
         snap = session.snapshot()
-        sf.write_text(json.dumps(snap), encoding="utf-8")
+        tmp = sf.parent / (sf.name + ".tmp")
+        tmp.write_text(json.dumps(snap), encoding="utf-8")
+        os.replace(tmp, sf)
     except OSError:
         pass
 
 
 def _load_session(path: Path) -> dict | None:
-    """Read the saved session snapshot for *path*, or None if not found."""
-    sf = _session_file(path)
-    if not sf.exists():
-        return None
-    try:
-        return json.loads(sf.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        return None
+    """Read the saved session snapshot for *path* (current or legacy form), or None."""
+    for sf in (_session_file(path), _legacy_session_file(path)):
+        if sf.exists():
+            try:
+                return json.loads(sf.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                return None
+    return None
 
 
 def _purge_session(path: Path) -> bool:
-    """Delete the saved session snapshot for *path*. Returns True if removed."""
-    sf = _session_file(path)
-    try:
-        if sf.exists():
-            sf.unlink()
-            return True
-    except OSError:
-        pass
-    return False
+    """Delete every saved session snapshot for *path* (current + legacy). Returns
+    True if any file was removed."""
+    removed = False
+    for sf in (
+        _session_file(path),
+        _legacy_session_file(path),
+        _legacy_state_file(path),
+    ):
+        try:
+            if sf.exists():
+                sf.unlink()
+                removed = True
+        except OSError:
+            pass
+    return removed
 
 
 def _find_running(path: Path) -> int | None:
@@ -382,9 +494,7 @@ def _idle_reaper(session: Session, server: Server, timeout: float):
     """
     check_interval = min(60.0, max(0.5, timeout / 4.0))
     while True:
-        with session._cond:
-            session._cond.wait(timeout=check_interval)
-            idle = time.time() - session.last_activity
+        idle = session.wait_idle(check_interval)
         if idle >= timeout:
             threading.Thread(target=server.shutdown, daemon=True).start()
             return
@@ -403,6 +513,15 @@ def _run_daemon(path: Path, port: int, open_browser: bool, restore: bool = False
         saved = _load_session(path)
         if saved is not None:
             session.restore(saved)
+            # If the document was edited on disk while the daemon was down, the
+            # file is the source of truth: re-seed the session text from it,
+            # drop the now-invalid diff history, and re-flag stale comments.
+            try:
+                disk_text = path.read_text(encoding="utf-8")
+            except OSError:
+                disk_text = session.current_text
+            if disk_text != session.current_text:
+                session.reconcile_disk(disk_text)
 
     # Set up write-through persistence.
     session.on_change = lambda: _save_session(session)
