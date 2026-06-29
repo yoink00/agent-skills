@@ -324,3 +324,36 @@ class TestReviewWait:
         assert data["submitted"] is True
         # Woke promptly on submit rather than waiting the full window.
         assert elapsed < 2.0
+
+
+# ---------------------------------------------------------------------------
+# Server.handle_error — socketserver's real error hook (a handler-level
+# handle_error is never called by the framework, so the logging must live on
+# the Server subclass). Pins down the bug where the logging was attached to a
+# dead Handler.handle_error and silently swallowed instead.
+# ---------------------------------------------------------------------------
+
+
+class TestErrorLogging:
+    def test_handler_exception_is_logged_not_swallowed(
+        self, httpd, monkeypatch, capsys
+    ):
+        def boom(_self):
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(Handler, "do_GET", boom)
+
+        conn = http.client.HTTPConnection("127.0.0.1", httpd["port"], timeout=3.0)
+        conn.request("GET", "/api/ping")
+        try:
+            conn.getresponse().read()
+        except http.client.RemoteDisconnected:
+            pass
+        conn.close()
+
+        # handle_error runs in the server's worker thread; let it flush stderr.
+        time.sleep(0.05)
+        err = capsys.readouterr().err
+        assert "mdedit handler error" in err
+        assert "RuntimeError" in err
+        assert "kaboom" in err

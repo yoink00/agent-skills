@@ -53,18 +53,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def handle_error(self, *_):
-        # Don't dump a full traceback (the daemon's std streams are /dev/null in
-        # production), but never swallow an error silently — a one-liner to stderr
-        # keeps real routing/handler bugs debuggable when run in the foreground.
-        try:
-            info = sys.exc_info()
-            exc = info[1]
-            msg = f"{type(exc).__name__}: {exc}" if exc else "unknown error"
-        except Exception:
-            msg = "unknown error"
-        sys.stderr.write(f"mdedit handler error on {self.command} {self.path}: {msg}\n")
-
     # -- helpers ------------------------------------------------------------
 
     def _json(self, obj, code=200):
@@ -104,9 +92,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ``Content-Type: text/plain``) at ``http://127.0.0.1:<port>`` — which the
         browser does not preflight and which the server would otherwise happily
         honour (editing the document, stopping the session, …). Require the
-        ``Host`` to name the local address and, when the browser advertises an
-        ``Origin`` / ``Sec-Fetch-Site``, require it to be same-origin. CLI
-        clients (no ``Origin``, ``Host: 127.0.0.1:<port>``) pass.
+        ``Host`` to name the local address; when the browser advertises an
+        ``Origin`` it must be one of the local origins, and ``Sec-Fetch-Site``
+        must not be ``cross-site``. CLI clients (no ``Origin``,
+        ``Host: 127.0.0.1:<port>``) pass.
         """
         port = 0
         addr = self.server.server_address
@@ -290,8 +279,21 @@ class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-    def handle_error(self, *_):
-        pass
+    def handle_error(self, _request, client_address):
+        # ``socketserver`` routes any exception raised inside a request handler
+        # to here (see ``ThreadingTCPServer.process_request_thread``); this is
+        # the framework's real error hook — a handler-level ``handle_error`` is
+        # never called. Don't dump a full traceback (the daemon's std streams
+        # are /dev/null in production), but never swallow silently either: a
+        # one-liner to stderr keeps routing/handler bugs debuggable in the
+        # foreground. (BrokenPipe/ConnectionReset are absorbed earlier in
+        # ``Handler.handle`` and never reach here.)
+        try:
+            exc = sys.exc_info()[1]
+            msg = f"{type(exc).__name__}: {exc}" if exc else "unknown error"
+        except Exception:
+            msg = "unknown error"
+        sys.stderr.write(f"mdedit handler error from {client_address}: {msg}\n")
 
 
 # ---------------------------------------------------------------------------
