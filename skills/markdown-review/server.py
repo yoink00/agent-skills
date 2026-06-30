@@ -13,6 +13,7 @@ the front-end (``frontend.build_html``).
 from __future__ import annotations
 
 import base64
+import hashlib
 import http.client
 import http.server
 import json
@@ -33,6 +34,11 @@ from model import Session
 DEFAULT_PORT = 7575
 # Where we record running sessions so CLI clients can find the daemon.
 STATE_DIR = Path(os.environ.get("MDEDIT_STATE_DIR", Path.home() / ".cache" / "mdedit"))
+
+# Most filesystems cap a single path component at 255 bytes (NAME_MAX).
+# Base64 of a ~190-char path already reaches that, so longer paths fall back
+# to a fixed-length SHA-256 digest (see ``_state_key``).
+_MAX_STATE_KEY_LEN = 200
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +78,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         object (so callers can surface a 400 rather than silently treating a
         malformed request as "no edits").
         """
-        length = int(self.headers.get("Content-Length", "0") or "0")
-        if not length:
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            return None
+        if length < 0:
+            return None
+        if length == 0:
             return {}
         raw = self.rfile.read(length)
         try:
@@ -102,7 +113,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if isinstance(addr, tuple):
             port = addr[1]
         local_hosts = (f"127.0.0.1:{port}", f"[::1]:{port}", f"localhost:{port}")
-        if self.headers.get("Host", "") not in local_hosts:
+        # Host is case-insensitive per RFC 7230 §5.4; normalise so a browser
+        # or CLI that sends ``Host: Localhost:<port>`` is not wrongly rejected.
+        if self.headers.get("Host", "").lower() not in local_hosts:
             return False
         origin = self.headers.get("Origin")
         if origin:
@@ -309,8 +322,16 @@ def _state_key(path: Path) -> str:
     documents silently shared one daemon/session state file. URL-safe base64 of
     the resolved path is injective and uses only ``[A-Za-z0-9_-]`` (no path
     separators), so each document gets its own state directory.
+
+    For very long paths the base64 form would exceed NAME_MAX (~255 bytes) and
+    ``mkdir`` would fail; those fall back to a fixed-length SHA-256 digest,
+    which is still injective for all practical purposes.
     """
-    return base64.urlsafe_b64encode(str(path.resolve()).encode("utf-8")).decode("ascii")
+    raw = str(path.resolve()).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii")
+    if len(encoded) <= _MAX_STATE_KEY_LEN:
+        return encoded
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _legacy_state_key(path: Path) -> str:
@@ -373,13 +394,18 @@ def _save_session(session: Session) -> None:
     lose the resumable session on the next load).
     """
     sf = _session_file(session.path)
+    tmp = sf.parent / (sf.name + ".tmp")
     try:
         snap = session.snapshot()
-        tmp = sf.parent / (sf.name + ".tmp")
         tmp.write_text(json.dumps(snap), encoding="utf-8")
         os.replace(tmp, sf)
     except OSError:
-        pass
+        # Don't leave the temp file behind on a failed write (it would
+        # accumulate across failures and confuse a later ``os.replace``).
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
 
 
 def _load_session(path: Path) -> dict | None:
@@ -394,12 +420,18 @@ def _load_session(path: Path) -> dict | None:
 
 
 def _purge_session(path: Path) -> bool:
-    """Delete every saved session snapshot for *path* (current + legacy). Returns
-    True if any file was removed."""
+    """Delete every saved state file for *path* (current + legacy forms).
+
+    Removes both the resumable ``session.json`` and the daemon's
+    ``daemon.json`` under the current and legacy key schemes, so ``stop
+    --purge`` leaves nothing behind. Returns True if any file was removed.
+    """
     removed = False
     for sf in (
         _session_file(path),
+        _state_file(path),
         _legacy_session_file(path),
+        _legacy_daemon_file(path),
         _legacy_state_file(path),
     ):
         try:

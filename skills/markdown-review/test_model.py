@@ -730,6 +730,15 @@ class TestReconcileDisk:
         assert session.version == v0 + 1
         assert calls == [1]
 
+    def test_stale_is_sticky_does_not_unflag_on_reappear(self, session):
+        # A comment previously marked stale stays stale even if a later disk
+        # edit re-introduces the quote text (reconcile only flags newly-gone
+        # quotes; it never auto-clears an existing stale flag).
+        c = session.add_comment("note", quote="Hello")
+        c.stale = True
+        session.reconcile_disk("# Hello is back\n")
+        assert c.stale is True
+
 
 # ---------------------------------------------------------------------------
 # on_change callback
