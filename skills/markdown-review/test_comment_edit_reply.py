@@ -19,113 +19,23 @@ Requires Playwright + chromium:
 """
 
 import json
-import os
-import signal
 import subprocess
 import sys
-import time
-from pathlib import Path
 
 import pytest
 
-SKILL_DIR = Path(__file__).resolve().parent
-MDEDIT = SKILL_DIR / "mdedit.py"
-
 playwright = pytest.importorskip("playwright.sync_api")
+from conftest import (  # noqa: E402
+    MDEDIT,
+    add_general_comment,
+    make_env,
+    make_snapshot,
+    set_author,
+    spawn_daemon,
+    stop_daemon,
+    write_share_html,
+)
 from playwright.sync_api import sync_playwright  # noqa: E402
-
-# frontend is imported only to build the share HTML; no daemon needed.
-if str(SKILL_DIR) not in sys.path:
-    sys.path.insert(0, str(SKILL_DIR))
-import frontend  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _snapshot(
-    name="share-doc.md", text="# Shared Plan\n\nShip feature X in two weeks.\n"
-):
-    return {
-        "name": name,
-        "version": 1,
-        "submitted": False,
-        "current_round": 1,
-        "original_text": text,
-        "current_text": text,
-        "edits": [],
-        "comments": [],
-    }
-
-
-def _write_share_html(tmp_path: Path, snapshot: dict | None = None) -> Path:
-    html = frontend.build_share_html(snapshot or _snapshot())
-    out = tmp_path / "share.share.html"
-    out.write_text(html, encoding="utf-8")
-    return out
-
-
-def _set_author(page, name="Alice"):
-    """Dismiss the author prompt with the given name."""
-    page.fill("#author-input", name)
-    page.click("#author-save")
-    page.wait_for_selector("#author-prompt.hidden", state="hidden")
-
-
-def _add_general_comment(page, body="original note"):
-    """Add a general comment via the sidebar box and wait for its card."""
-    page.fill("#general-input", body)
-    page.click("#general-add")
-    page.wait_for_selector(".comment-card")
-
-
-def _env(state_dir: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    env["MDEDIT_STATE_DIR"] = str(state_dir)
-    env["MDEDIT_IDLE_TIMEOUT"] = "0"
-    return env
-
-
-def _state_file(state_dir: Path) -> dict | None:
-    files = list(state_dir.glob("*/daemon.json"))
-    if not files:
-        files = list(state_dir.glob("*.json"))
-    if not files:
-        return None
-    return json.loads(files[0].read_text())
-
-
-def _spawn_daemon(state_dir: Path, doc: Path) -> dict:
-    env = _env(state_dir)
-    subprocess.run(
-        [sys.executable, str(MDEDIT), "--no-browser", "open", str(doc)],
-        check=True,
-        capture_output=True,
-        env=env,
-        timeout=15,
-    )
-    for _ in range(50):
-        info = _state_file(state_dir)
-        if info:
-            return info
-        time.sleep(0.1)
-    raise RuntimeError("daemon state file never appeared")
-
-
-def _stop(pid: int) -> None:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
-        return
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return
-        time.sleep(0.1)
-
 
 # ---------------------------------------------------------------------------
 # Edit comment — share page (no daemon)
@@ -135,14 +45,14 @@ def _stop(pid: int) -> None:
 def test_edit_comment_share_page_updates_body(tmp_path):
     """Clicking Edit, changing the textarea, and Save updates the visible
     comment body in-place."""
-    html_path = _write_share_html(tmp_path)
+    html_path = write_share_html(tmp_path)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(html_path.as_uri())
         page.wait_for_selector("#md-render")
-        _set_author(page, "Alice")
-        _add_general_comment(page, "original wording")
+        set_author(page, "Alice")
+        add_general_comment(page, "original wording")
 
         # Enter edit mode.
         page.click(".comment-card .edit-btn")
@@ -167,14 +77,14 @@ def test_edit_comment_share_page_updates_body(tmp_path):
 
 def test_edit_comment_cancel_restores_body(tmp_path):
     """Cancelling an edit restores the original body without saving."""
-    html_path = _write_share_html(tmp_path)
+    html_path = write_share_html(tmp_path)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(html_path.as_uri())
         page.wait_for_selector("#md-render")
-        _set_author(page, "Alice")
-        _add_general_comment(page, "keep me")
+        set_author(page, "Alice")
+        add_general_comment(page, "keep me")
 
         page.click(".comment-card .edit-btn")
         page.wait_for_selector(".comment-card .edit-area")
@@ -193,14 +103,14 @@ def test_edit_comment_cancel_restores_body(tmp_path):
 
 def test_edit_comment_reflected_in_export(tmp_path):
     """An edited comment body is what gets exported."""
-    html_path = _write_share_html(tmp_path)
+    html_path = write_share_html(tmp_path)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(html_path.as_uri())
         page.wait_for_selector("#md-render")
-        _set_author(page, "Alice")
-        _add_general_comment(page, "original")
+        set_author(page, "Alice")
+        add_general_comment(page, "original")
 
         page.click(".comment-card .edit-btn")
         page.wait_for_selector(".comment-card .edit-area")
@@ -228,14 +138,14 @@ def test_edit_comment_reflected_in_export(tmp_path):
 def test_reply_comment_share_page(tmp_path):
     """Replying to a comment adds a threaded item under the card with the
     author's name and body."""
-    html_path = _write_share_html(tmp_path)
+    html_path = write_share_html(tmp_path)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(html_path.as_uri())
         page.wait_for_selector("#md-render")
-        _set_author(page, "Alice")
-        _add_general_comment(page, "main thread")
+        set_author(page, "Alice")
+        add_general_comment(page, "main thread")
 
         # Open the reply form and submit.
         page.click(".comment-card .reply-btn")
@@ -253,14 +163,14 @@ def test_reply_comment_share_page(tmp_path):
 
 def test_reply_cancel_removes_form(tmp_path):
     """Cancelling a reply removes the form without adding a reply."""
-    html_path = _write_share_html(tmp_path)
+    html_path = write_share_html(tmp_path)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(html_path.as_uri())
         page.wait_for_selector("#md-render")
-        _set_author(page, "Alice")
-        _add_general_comment(page, "main thread")
+        set_author(page, "Alice")
+        add_general_comment(page, "main thread")
 
         page.click(".comment-card .reply-btn")
         page.wait_for_selector(".comment-card .reply-form")
@@ -276,14 +186,14 @@ def test_reply_cancel_removes_form(tmp_path):
 def test_reply_included_in_export(tmp_path):
     """Replies are carried in the exported JSON so they round-trip back to
     a live session."""
-    html_path = _write_share_html(tmp_path)
+    html_path = write_share_html(tmp_path)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(html_path.as_uri())
         page.wait_for_selector("#md-render")
-        _set_author(page, "Alice")
-        _add_general_comment(page, "main thread")
+        set_author(page, "Alice")
+        add_general_comment(page, "main thread")
 
         page.click(".comment-card .reply-btn")
         page.wait_for_selector(".comment-card .reply-form")
@@ -316,7 +226,7 @@ def test_edit_comment_live_session_persists(tmp_path):
     doc = tmp_path / "live.md"
     doc.write_text("# Plan\n\nShip feature X.\n")
 
-    info = _spawn_daemon(state_dir, doc)
+    info = spawn_daemon(state_dir, doc)
     url = f"http://127.0.0.1:{info['port']}"
     try:
         with sync_playwright() as p:
@@ -324,7 +234,7 @@ def test_edit_comment_live_session_persists(tmp_path):
             page = browser.new_page()
             page.goto(url)
             page.wait_for_selector("#md-render")
-            _add_general_comment(page, "original note")
+            add_general_comment(page, "original note")
 
             page.click(".comment-card .edit-btn")
             page.wait_for_selector(".comment-card .edit-area")
@@ -348,7 +258,7 @@ def test_edit_comment_live_session_persists(tmp_path):
         assert data["comments"][0]["body"] == "edited via live page"
         assert data["comments"][0]["replies"] == []
     finally:
-        _stop(info["pid"])
+        stop_daemon(info["pid"])
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +274,7 @@ def test_reply_comment_live_session_persists(tmp_path):
     doc = tmp_path / "live.md"
     doc.write_text("# Plan\n\nShip feature X.\n")
 
-    info = _spawn_daemon(state_dir, doc)
+    info = spawn_daemon(state_dir, doc)
     url = f"http://127.0.0.1:{info['port']}"
     try:
         with sync_playwright() as p:
@@ -372,7 +282,7 @@ def test_reply_comment_live_session_persists(tmp_path):
             page = browser.new_page()
             page.goto(url)
             page.wait_for_selector("#md-render")
-            _add_general_comment(page, "main thread")
+            add_general_comment(page, "main thread")
 
             page.click(".comment-card .reply-btn")
             page.wait_for_selector(".comment-card .reply-form")
@@ -394,7 +304,7 @@ def test_reply_comment_live_session_persists(tmp_path):
         assert c["replies"][0]["body"] == "a live reply"
         assert c["replies"][0]["author"] == "You"
     finally:
-        _stop(info["pid"])
+        stop_daemon(info["pid"])
 
 
 # ---------------------------------------------------------------------------
@@ -416,16 +326,16 @@ def test_reply_round_trip_share_to_live(tmp_path):
     doc.write_text("# Shared Plan\n\nShip feature X in two weeks.\n")
 
     # 1. On the share page, add a comment and a reply, then export.
-    snapshot = _snapshot(text=doc.read_text())
-    html_path = _write_share_html(tmp_path, snapshot)
+    snapshot = make_snapshot(text=doc.read_text())
+    html_path = write_share_html(tmp_path, snapshot)
     exported = tmp_path / "reviewer.comments.json"
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page()
         page.goto(html_path.as_uri())
         page.wait_for_selector("#md-render")
-        _set_author(page, "Frank")
-        _add_general_comment(page, "needs a timeline")
+        set_author(page, "Frank")
+        add_general_comment(page, "needs a timeline")
 
         page.click(".comment-card .reply-btn")
         page.wait_for_selector(".comment-card .reply-form")
@@ -441,9 +351,9 @@ def test_reply_round_trip_share_to_live(tmp_path):
         browser.close()
 
     # 2. Import into a live session and verify the reply survived.
-    info = _spawn_daemon(state_dir, doc)
+    info = spawn_daemon(state_dir, doc)
     try:
-        env = _env(state_dir)
+        env = make_env(state_dir)
         result = subprocess.run(
             [
                 sys.executable,
@@ -486,4 +396,4 @@ def test_reply_round_trip_share_to_live(tmp_path):
         assert c["replies"][0]["body"] == "agreed, two weeks"
         assert c["replies"][0]["author"] == "Frank"
     finally:
-        _stop(info["pid"])
+        stop_daemon(info["pid"])

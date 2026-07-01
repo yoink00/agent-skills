@@ -480,6 +480,37 @@ def test_touch_bumps_activity_without_state_change(session):
 
 
 # ---------------------------------------------------------------------------
+# wait_idle
+# ---------------------------------------------------------------------------
+
+
+class TestWaitIdle:
+    def test_blocks_for_the_poll_window(self, session):
+        start = time.monotonic()
+        session.wait_idle(0.2)
+        assert time.monotonic() - start >= 0.18
+
+    def test_returns_idle_seconds_since_activity(self, session):
+        # No activity during the wait → idle time is at least the poll window.
+        idle = session.wait_idle(0.1)
+        assert isinstance(idle, float)
+        assert idle >= 0.1
+
+    def test_touch_resets_reported_idle(self, session):
+        time.sleep(0.15)
+        # A touch partway through the wait pulls last_activity forward, so the
+        # reported idle ends up smaller than the full poll window.
+        threading.Timer(0.05, session.touch).start()
+        idle = session.wait_idle(0.2)
+        assert idle < 0.2
+
+    def test_does_not_bump_version(self, session):
+        v = session.version
+        session.wait_idle(0.05)
+        assert session.version == v
+
+
+# ---------------------------------------------------------------------------
 # waiters
 # ---------------------------------------------------------------------------
 
@@ -654,6 +685,59 @@ class TestRestore:
         assert s.original_text == "orig\n"
         assert s.edits == []
         assert s.comments == []
+
+
+# ---------------------------------------------------------------------------
+# reconcile_disk()
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileDisk:
+    def test_reseeds_text_from_disk(self, session):
+        session.apply_edit("Hello", "Hi")  # an edit now in history
+        session.reconcile_disk("# Completely different\n")
+        assert session.current_text == "# Completely different\n"
+        assert session.original_text == "# Completely different\n"
+
+    def test_clears_stale_diff_history(self, session):
+        session.apply_edit("Hello", "Hi")
+        assert session.edits
+        session.reconcile_disk("# Something else entirely\n")
+        assert session.edits == []
+
+    def test_flags_comments_whose_quote_is_gone(self, session):
+        c = session.add_comment("note", quote="Hello")
+        assert c.stale is False
+        session.reconcile_disk("# No match here\n")
+        assert session.comments[0].stale is True
+
+    def test_keeps_matching_comments_fresh(self, session):
+        session.add_comment("note", quote="Hello")
+        session.reconcile_disk("# Hello again\n")
+        assert session.comments[0].stale is False
+
+    def test_keeps_comments_themselves(self, session):
+        session.add_comment("feedback", quote="Hello")
+        session.reconcile_disk("# rewritten\n")
+        # The comment body survives even when its quote no longer matches.
+        assert session.comments[0].body == "feedback"
+
+    def test_bumps_version_and_notifies(self, session):
+        calls = []
+        session.on_change = lambda: calls.append(1)
+        v0 = session.version
+        session.reconcile_disk("new\n")
+        assert session.version == v0 + 1
+        assert calls == [1]
+
+    def test_stale_is_sticky_does_not_unflag_on_reappear(self, session):
+        # A comment previously marked stale stays stale even if a later disk
+        # edit re-introduces the quote text (reconcile only flags newly-gone
+        # quotes; it never auto-clears an existing stale flag).
+        c = session.add_comment("note", quote="Hello")
+        c.stale = True
+        session.reconcile_disk("# Hello is back\n")
+        assert c.stale is True
 
 
 # ---------------------------------------------------------------------------

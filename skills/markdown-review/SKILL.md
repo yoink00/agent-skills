@@ -355,16 +355,18 @@ someone edited it directly), `resume` includes a `warning` field in the output:
 {
   "ok": true,
   "restored": true,
-  "warning": "document was modified externally since the session was saved",
+  "warning": "document was modified externally; session reset to match disk (diff history discarded, affected comments flagged stale)",
   "disk_text_length": 1250,
   "saved_text_length": 1234
 }
 ```
 
-When you see this warning, inspect the document to understand what changed. The
-saved diff history and comments may reference text that no longer matches. You
-can either proceed with the restored session (if the changes are minor) or start
-fresh with `open`.
+When you see this warning, the file on disk has been taken as the source of
+truth: the session text was re-seeded from it, the previous diff history was
+discarded (it referenced text that no longer matches), and any comments whose
+quoted text no longer appears were flagged `stale`. Inspect the document to
+understand what changed, then proceed with the restored comments. Comments
+themselves are always preserved — only their anchoring is re-evaluated.
 
 ### Stopping without saving / purging
 

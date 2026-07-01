@@ -11,101 +11,16 @@ Requires Playwright + chromium:
     pip install playwright && python -m playwright install chromium
 """
 
-import http.client
-import json
-import os
-import signal
-import subprocess
-import sys
-import time
-from pathlib import Path
-
 import pytest
 
-MDEDIT = Path(__file__).resolve().parent / "mdedit.py"
-
 playwright = pytest.importorskip("playwright.sync_api")
+from conftest import (  # noqa: E402
+    edit_cli,
+    post_comment,
+    spawn_daemon,
+    stop_daemon,
+)
 from playwright.sync_api import sync_playwright  # noqa: E402
-
-# ---------------------------------------------------------------------------
-# Harness
-# ---------------------------------------------------------------------------
-
-
-def _env(state_dir: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    env["MDEDIT_STATE_DIR"] = str(state_dir)
-    env["MDEDIT_IDLE_TIMEOUT"] = "0"  # never auto-shutdown during tests
-    return env
-
-
-def _state_file(state_dir: Path) -> dict | None:
-    files = list(state_dir.glob("*/daemon.json"))
-    if not files:
-        # Fall back to old-style flat files.
-        files = list(state_dir.glob("*.json"))
-    if not files:
-        return None
-    return json.loads(files[0].read_text())
-
-
-def _spawn(state_dir: Path, doc: Path) -> dict:
-    env = _env(state_dir)
-    subprocess.run(
-        [sys.executable, str(MDEDIT), "--no-browser", "open", str(doc)],
-        check=True,
-        capture_output=True,
-        env=env,
-        timeout=15,
-    )
-    for _ in range(50):
-        info = _state_file(state_dir)
-        if info:
-            return info
-        time.sleep(0.1)
-    raise RuntimeError("daemon state file never appeared")
-
-
-def _stop(pid: int) -> None:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError:
-        return
-    deadline = time.time() + 5
-    while time.time() < deadline:
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return
-        time.sleep(0.1)
-
-
-def _edit(doc: Path, state_dir: Path, old: str, new: str) -> None:
-    """Apply a search/replace edit via the CLI so the diff view gets content."""
-    env = _env(state_dir)
-    subprocess.run(
-        [sys.executable, str(MDEDIT), "edit", str(doc), "--old", old, "--new", new],
-        check=True,
-        capture_output=True,
-        env=env,
-        timeout=15,
-    )
-
-
-def _post_comment(port: int, **fields) -> dict:
-    body = json.dumps(fields)
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=3.0)
-    conn.request(
-        "POST",
-        "/api/comment",
-        body=body,
-        headers={"Content-Type": "application/json"},
-    )
-    resp = conn.getresponse()
-    data = json.loads(resp.read().decode())
-    conn.close()
-    return data
-
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -123,7 +38,7 @@ def session(tmp_path):
         "The quick brown fox jumps over the lazy dog.\n"
         "Ship feature X in two weeks.\n"
     )
-    info = _spawn(state_dir, doc)
+    info = spawn_daemon(state_dir, doc)
     port = info["port"]
     pid = info["pid"]
     try:
@@ -134,7 +49,7 @@ def session(tmp_path):
             "state_dir": state_dir,
         }
     finally:
-        _stop(pid)
+        stop_daemon(pid)
 
 
 def _count_marks(page, root_selector: str, quote: str) -> int:
@@ -161,8 +76,8 @@ def test_doc_view_highlights_two_phrases_in_same_text_node(session):
 
         # Both quotes live in the same <p> text node:
         #   "The quick brown fox jumps over the lazy dog."
-        _post_comment(port, body="c1", quote="quick brown fox", source="doc")
-        _post_comment(port, body="c2", quote="the lazy dog", source="doc")
+        post_comment(port, body="c1", quote="quick brown fox", source="doc")
+        post_comment(port, body="c2", quote="the lazy dog", source="doc")
 
         # The page's poll loop picks up the version bump and re-applies
         # highlights. Wait for each quote's mark to appear.
@@ -194,7 +109,7 @@ def test_diff_view_highlights_two_phrases_on_same_line(session):
     state_dir = session["state_dir"]
 
     # Produce a single added line containing two selectable phrases.
-    _edit(
+    edit_cli(
         doc,
         state_dir,
         old="Ship feature X in two weeks.",
@@ -209,8 +124,8 @@ def test_diff_view_highlights_two_phrases_on_same_line(session):
         page.wait_for_selector("#diff-render", state="attached")
 
         # Both quotes occur on the same added diff line of round 1.
-        _post_comment(port, body="d1", quote="three weeks", source="diff", round=1)
-        _post_comment(port, body="d2", quote="a buffer", source="diff", round=1)
+        post_comment(port, body="d1", quote="three weeks", source="diff", round=1)
+        post_comment(port, body="d2", quote="a buffer", source="diff", round=1)
 
         page.wait_for_function(
             """(quote) => [...document.querySelectorAll('#diff-render mark.has-comment')]
@@ -242,7 +157,7 @@ def make_session(tmp_path):
         state_dir.mkdir(exist_ok=True)
         doc = tmp_path / "doc.md"
         doc.write_text(doc_text)
-        info.update(_spawn(state_dir, doc))
+        info.update(spawn_daemon(state_dir, doc))
         return {
             "port": info["port"],
             "url": f"http://127.0.0.1:{info['port']}",
@@ -252,7 +167,7 @@ def make_session(tmp_path):
 
     yield _make
     if info.get("pid"):
-        _stop(info["pid"])
+        stop_daemon(info["pid"])
 
 
 def test_doc_view_highlights_only_the_anchored_occurrence(make_session):
@@ -269,7 +184,7 @@ def test_doc_view_highlights_only_the_anchored_occurrence(make_session):
 
         # "is" appears three times: after "cat" (standalone), inside "This",
         # and after "dog" (standalone). Anchor to the first via its context.
-        _post_comment(
+        post_comment(
             session["port"],
             body="c",
             quote="is",
@@ -310,7 +225,7 @@ def test_doc_view_highlights_selection_spanning_inline_markup(make_session):
         page.goto(session["url"])
         page.wait_for_selector("#md-render")
 
-        _post_comment(
+        post_comment(
             session["port"],
             body="c",
             quote="Some bold text",
@@ -338,7 +253,7 @@ def test_doc_view_highlights_whole_bullet_line(make_session):
         page.goto(session["url"])
         page.wait_for_selector("#md-render")
 
-        _post_comment(
+        post_comment(
             session["port"],
             body="c",
             quote="alpha item\n",
